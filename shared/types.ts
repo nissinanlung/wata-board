@@ -34,6 +34,7 @@ export interface PaymentRequest {
   amount: number;
   userId: string;
   memo?: string; // Optional memo for transaction identification
+  nonce: string; // Unique nonce to prevent replay attacks
   timestamp?: string; // ISO string for consistency
 }
 

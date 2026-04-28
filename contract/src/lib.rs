@@ -71,6 +71,7 @@ pub struct PaymentRecord {
     pub meter_id: String,
     pub timestamp: u64,
     pub memo: Option<String>,
+    pub nonce: String,
     pub refunded: bool,
     pub is_refunded: bool,
     pub refund_id: Option<u32>,
@@ -173,17 +174,23 @@ impl NepaBillingContract {
             .unwrap_or_else(|| panic!("Contract not initialized"))
     }
     
-    pub fn pay_bill(env: Env, from: Address, token_address: Address, meter_id: String, amount: i128, memo: Option<String>) -> u64 {
+    pub fn pay_bill(env: Env, from: Address, token_address: Address, meter_id: String, amount: i128, memo: Option<String>, nonce: String) -> u64 {
         // 1. Verify the user authorized this payment
         from.require_auth();
 
-        // 2. Initialize the Token client
+        // 2. Check nonce uniqueness to prevent replay attacks
+        let nonce_key = (Symbol::short("NONCE"), from.clone(), nonce.clone());
+        if env.storage().persistent().has(&nonce_key) {
+            panic!("Nonce already used - potential replay attack");
+        }
+
+        // 3. Initialize the Token client
         let token_client = token::Client::new(&env, &token_address);
 
-        // 3. Move the tokens from the User to the Contract
+        // 4. Move the tokens from the User to the Contract
         token_client.transfer(&from, &env.current_contract_address(), &amount);
 
-        // 4. Create payment record
+        // 5. Create payment record
         let payment_id = Self::_generate_payment_id(&env);
         let timestamp = env.ledger().timestamp();
         
@@ -193,19 +200,31 @@ impl NepaBillingContract {
             meter_id: meter_id.clone(),
             timestamp,
             memo,
+            nonce: nonce.clone(),
             refunded: false,
             is_refunded: false,
             refund_id: None,
         };
 
-        // 5. Store payment record
+        // 6. Store payment record
         env.storage().persistent().set(&payment_id, &payment_record);
 
-        // 6. Update the meter total (backward compatibility)
+        // 7. Mark nonce as used
+        env.storage().persistent().set(&nonce_key, &true);
+
+        // 8. Update the meter total (backward compatibility)
         let current_total: i128 = env.storage().persistent().get(&meter_id).unwrap_or(0);
         env.storage().persistent().set(&meter_id, &(current_total + amount));
 
         payment_id
+    }
+
+    /// Generate unique payment ID
+    fn _generate_payment_id(env: &Env) -> u64 {
+        let counter: u64 = env.storage().persistent().get(&PAYMENT_COUNTER).unwrap_or(0);
+        let new_id = counter + 1;
+        env.storage().persistent().set(&PAYMENT_COUNTER, &new_id);
+        new_id
     }
 
     pub fn get_total_paid(env: Env, meter_id: String) -> i128 {
