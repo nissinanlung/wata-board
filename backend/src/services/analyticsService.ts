@@ -41,6 +41,19 @@ export interface SystemAnalytics {
   monthlyGrowth: AnalyticsTrendPoint[];
 }
 
+export interface PaymentDashboardAnalytics {
+  totalPayments: number;
+  totalVolume: number;
+  averagePayment: number;
+  successRate: number;
+  failureRate: number;
+  pendingRate: number;
+  monthlyTrend: AnalyticsTrendPoint[];
+  statusDistribution: Record<string, number>;
+  trendDirection: "increasing" | "decreasing" | "stable";
+  insights: string[];
+}
+
 export interface PredictiveInsights {
   nextMonthPrediction: number;
   spendingTrend: "increasing" | "decreasing" | "stable";
@@ -432,6 +445,87 @@ export class AnalyticsService {
       logger.error("Failed to get meter analytics", { error, meterId });
       throw new Error("Meter analytics failed");
     }
+  }
+
+  /**
+   * Get payment-focused dashboard analytics
+   */
+  async getPaymentDashboardAnalytics(): Promise<PaymentDashboardAnalytics> {
+    const cacheKey = "payment_dashboard_analytics";
+
+    return cacheService.getOrSet(
+      cacheKey,
+      async () => {
+        const systemAnalytics = await this.generateSystemAnalytics();
+        const totalPayments = systemAnalytics.totalPayments;
+        const totalVolume = systemAnalytics.totalVolume;
+        const averagePayment =
+          totalPayments > 0 ? totalVolume / totalPayments : 0;
+
+        const statusDistribution = systemAnalytics.paymentStatusDistribution;
+        const confirmed = statusDistribution.confirmed || 0;
+        const failed = statusDistribution.failed || 0;
+        const pending = statusDistribution.pending || 0;
+        const totalStatuses =
+          Object.values(statusDistribution).reduce(
+            (sum, value) => sum + value,
+            0,
+          ) || 1;
+
+        const successRate = (confirmed / totalStatuses) * 100;
+        const failureRate = (failed / totalStatuses) * 100;
+        const pendingRate = (pending / totalStatuses) * 100;
+
+        const monthlyTrend = systemAnalytics.monthlyGrowth;
+        let trendDirection: "increasing" | "decreasing" | "stable" = "stable";
+        if (monthlyTrend.length >= 2) {
+          const latest = monthlyTrend[monthlyTrend.length - 1].value;
+          const previous = monthlyTrend[monthlyTrend.length - 2].value;
+          const change = previous === 0 ? 0 : (latest - previous) / previous;
+          if (change > 0.1) trendDirection = "increasing";
+          else if (change < -0.1) trendDirection = "decreasing";
+        }
+
+        const insights: string[] = [];
+        if (trendDirection === "increasing") {
+          insights.push("Payment volume is trending up month-over-month.");
+        } else if (trendDirection === "decreasing") {
+          insights.push("Payment volume is declining and should be monitored.");
+        } else {
+          insights.push("Payment activity is stable across recent months.");
+        }
+
+        if (failureRate > 5) {
+          insights.push(
+            "Failure rate is above 5%, investigate provider/network reliability.",
+          );
+        }
+
+        if (pendingRate > 10) {
+          insights.push(
+            "Pending transactions are elevated, review settlement latency.",
+          );
+        }
+
+        insights.push(
+          `Average payment size is ${averagePayment.toFixed(2)} across ${totalPayments} transactions.`,
+        );
+
+        return {
+          totalPayments,
+          totalVolume,
+          averagePayment: Math.round(averagePayment * 100) / 100,
+          successRate: Math.round(successRate * 10) / 10,
+          failureRate: Math.round(failureRate * 10) / 10,
+          pendingRate: Math.round(pendingRate * 10) / 10,
+          monthlyTrend,
+          statusDistribution,
+          trendDirection,
+          insights,
+        };
+      },
+      10 * 60 * 1000,
+    );
   }
 
   /**
