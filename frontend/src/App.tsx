@@ -138,7 +138,7 @@ const Home = memo(() => {
 
       const account = await server.loadAccount(pubKeyString);
       const transactionBuilder = new TransactionBuilder(account, {
-        fee: BASE_FEE,
+        fee: feeEstimate ? feeEstimate.baseFee.toString() : BASE_FEE,
         networkPassphrase: networkConfig.networkPassphrase,
       })
         .addOperation(Operation.payment({
