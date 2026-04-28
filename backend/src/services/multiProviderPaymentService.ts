@@ -43,6 +43,13 @@ export class MultiProviderPaymentService {
       const provider = this.providerService.getProviderById(request.providerId);
       if (!provider || !provider.isActive) {
         const errorMessage = `Provider ${request.providerId} is not available`;
+        auditLogger.security('Payment rejected: provider unavailable', {
+          userId: request.userId,
+          providerId: request.providerId,
+          meterId: request.meter_id,
+          amount: request.amount,
+          paymentId
+        });
         void notifyPaymentWebhook({
           event: 'payment.failed',
           paymentId,
@@ -97,6 +104,14 @@ export class MultiProviderPaymentService {
           providerId: request.providerId,
           rateLimitResult 
         });
+        auditLogger.security('Payment rejected: provider rate limit exceeded', {
+          userId: request.userId,
+          providerId: request.providerId,
+          meterId: request.meter_id,
+          amount: request.amount,
+          paymentId,
+          rateLimitInfo: rateLimitResult
+        });
         void notifyPaymentWebhook({
           event: 'payment.failed',
           paymentId,
@@ -125,6 +140,15 @@ export class MultiProviderPaymentService {
           providerId: request.providerId,
           queuePosition: rateLimitResult.queuePosition 
         });
+        auditLogger.log('Payment queued for provider', {
+          userId: request.userId,
+          providerId: request.providerId,
+          meterId: request.meter_id,
+          amount: request.amount,
+          paymentId,
+          queuePosition: rateLimitResult.queuePosition,
+          rateLimitInfo: rateLimitResult
+        });
         void notifyPaymentWebhook({
           event: 'payment.queued',
           paymentId,
@@ -152,10 +176,12 @@ export class MultiProviderPaymentService {
       auditLogger.log('Payment executed successfully', { 
         userId: request.userId, 
         transactionId, 
+        paymentId,
         meter_id: request.meter_id, 
         amount: request.amount,
         providerId: request.providerId,
-        providerName: provider.name
+        providerName: provider.name,
+        timestamp: new Date().toISOString()
       });
       void notifyPaymentWebhook({
         event: 'payment.completed',
@@ -180,6 +206,15 @@ export class MultiProviderPaymentService {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown payment error';
       logger.error('Multi-provider payment processing failed', { error, request });
+      auditLogger.error('Multi-provider payment processing failed', {
+        userId: request.userId,
+        providerId: request.providerId,
+        meterId: request.meter_id,
+        amount: request.amount,
+        paymentId,
+        error: errorMessage,
+        stack: error instanceof Error ? error.stack : undefined
+      });
       void notifyPaymentWebhook({
         event: 'payment.failed',
         paymentId,

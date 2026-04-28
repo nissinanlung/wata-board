@@ -49,6 +49,12 @@ export class PaymentService {
     try {
       // 1. KYC Check
       const kycStatus = await kycService.getStatus(request.userId);
+      auditLogger.log('KYC status check', { 
+        userId: request.userId, 
+        status: kycStatus,
+        paymentId 
+      });
+
       if (kycStatus !== KYCStatus.VERIFIED) {
         const timestamp = new Date().toISOString();
         const result: PaymentResult = {
@@ -56,6 +62,13 @@ export class PaymentService {
           error: `KYC Verification Required. Current status: ${kycStatus}`,
           timestamp,
         };
+        auditLogger.security('Payment rejected: KYC required', {
+          userId: request.userId,
+          status: kycStatus,
+          paymentId,
+          meterId: request.meter_id,
+          amount: request.amount
+        });
         void notifyPaymentWebhook({
           event: 'payment.failed',
           paymentId,
@@ -78,6 +91,13 @@ export class PaymentService {
           error: 'Transaction flagged by AML monitoring system.',
           timestamp,
         };
+        auditLogger.security('Payment rejected: AML flag', {
+          userId: request.userId,
+          paymentId,
+          meterId: request.meter_id,
+          amount: request.amount,
+          reason: 'High value transaction or suspicious activity'
+        });
         void notifyPaymentWebhook({
           event: 'payment.failed',
           paymentId,
@@ -89,6 +109,12 @@ export class PaymentService {
           reason: 'AML monitoring flagged this transaction',
         });
         return result;
+      } else {
+        auditLogger.log('AML check passed', {
+          userId: request.userId,
+          paymentId,
+          amount: request.amount
+        });
       }
 
       // Check rate limit
@@ -110,11 +136,12 @@ export class PaymentService {
       if (!rateLimitResult.allowed && !rateLimitResult.queued) {
         const timestamp = new Date().toISOString();
         logger.warn('Payment rejected: rate limit exceeded', { userId: request.userId, rateLimitResult });
-        auditLogger.log('Payment rejected due to rate limit', { 
+        auditLogger.security('Payment rejected: rate limit exceeded', { 
           userId: request.userId, 
           meterId: request.meter_id, 
           amount: request.amount,
-          reason: 'rate_limit_exceeded'
+          paymentId,
+          rateLimitInfo
         });
         const result: PaymentResult = {
           success: false,
@@ -144,7 +171,9 @@ export class PaymentService {
           userId: request.userId, 
           meterId: request.meter_id, 
           amount: request.amount,
-          queuePosition: rateLimitResult.queuePosition 
+          paymentId,
+          queuePosition: rateLimitResult.queuePosition,
+          rateLimitInfo
         });
         const result: PaymentResult = {
           success: false,
@@ -175,9 +204,11 @@ export class PaymentService {
         auditLogger.log('Payment executed successfully', { 
           userId: request.userId, 
           transactionId, 
+          paymentId,
           meterId: request.meter_id, 
           amount: request.amount,
-          status: 'success'
+          status: 'success',
+          timestamp: new Date().toISOString()
         });
 
         // Asynchronously sync with accounting software
@@ -219,12 +250,14 @@ export class PaymentService {
       const timestamp = new Date().toISOString();
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       logger.error('Payment processing failed', { error, request });
-      auditLogger.log('Payment failed', { 
+      auditLogger.error('Payment processing failed', { 
         userId: request.userId, 
         meterId: request.meter_id, 
         amount: request.amount,
+        paymentId,
         error: errorMessage,
-        status: 'failed'
+        status: 'failed',
+        stack: error instanceof Error ? error.stack : undefined
       });
       void notifyPaymentWebhook({
         event: 'payment.failed',

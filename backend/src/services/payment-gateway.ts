@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { auditLogger } from '../utils/logger';
 
 export interface PaymentGatewayConfig {
   provider: 'stripe' | 'paypal' | 'flutterwave';
@@ -50,6 +51,15 @@ export class PaymentGatewayService {
         description: request.description,
       });
 
+      auditLogger.log('Payment intent created', {
+        transactionId: intent.id,
+        customerId: request.customerId,
+        meterId: request.meterId,
+        amount: intent.amount,
+        currency: intent.currency,
+        provider: this.provider
+      });
+
       return {
         transactionId: intent.id,
         status: intent.status as 'pending' | 'success' | 'failed',
@@ -58,7 +68,14 @@ export class PaymentGatewayService {
         timestamp: new Date(),
       };
     } catch (error) {
-      throw new Error(`Payment intent creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      auditLogger.error('Payment intent creation failed', {
+        customerId: request.customerId,
+        meterId: request.meterId,
+        amount: request.amount,
+        error: errorMessage
+      });
+      throw new Error(`Payment intent creation failed: ${errorMessage}`);
     }
   }
 
@@ -84,6 +101,14 @@ export class PaymentGatewayService {
         payment_method: paymentMethodId,
       });
 
+      auditLogger.log('Payment confirmed', {
+        transactionId: intent.id,
+        paymentMethodId,
+        status: intent.status,
+        amount: intent.amount,
+        provider: this.provider
+      });
+
       return {
         transactionId: intent.id,
         status: intent.status as 'pending' | 'success' | 'failed',
@@ -92,7 +117,13 @@ export class PaymentGatewayService {
         timestamp: new Date(intent.created * 1000),
       };
     } catch (error) {
-      throw new Error(`Payment confirmation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      auditLogger.error('Payment confirmation failed', {
+        paymentIntentId,
+        paymentMethodId,
+        error: errorMessage
+      });
+      throw new Error(`Payment confirmation failed: ${errorMessage}`);
     }
   }
 

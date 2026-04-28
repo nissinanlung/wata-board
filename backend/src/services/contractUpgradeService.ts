@@ -21,7 +21,7 @@
  *   3. restoreSnapshot()   – restore payment routing to old contract
  */
 
-import logger from '../utils/logger';
+import logger, { auditLogger } from '../utils/logger';
 import { migration001 } from '../migrations/001_initial_setup';
 import { contractProxy, ContractVersionEntry } from './contractProxy';
 import { ContractDataMigrationService } from './contractDataMigration';
@@ -127,6 +127,12 @@ class ContractUpgradeService {
     let snapshotId: string | undefined;
 
     logger.info('[UpgradeService] Starting contract upgrade', { from: fromVersion, to: newVersion });
+    auditLogger.security('Contract upgrade started', {
+      fromVersion,
+      toVersion: newVersion,
+      initiatedBy: deployedBy,
+      wasmHash
+    });
 
     try {
       if (!wasmHash || wasmHash.length < 10) throw new Error('Invalid WASM hash');
@@ -201,6 +207,14 @@ class ContractUpgradeService {
         paymentsMigrated: report.paymentsMigrated,
       });
 
+      auditLogger.security('Contract upgrade completed successfully', {
+        fromVersion,
+        toVersion: newVersion,
+        migrationsCount: migrationsRun.length,
+        paymentsMigrated: report.paymentsMigrated,
+        contractId: resolvedContractId
+      });
+
       return {
         success: true,
         fromVersion,
@@ -211,6 +225,12 @@ class ContractUpgradeService {
       };
     } catch (error: any) {
       logger.error('[UpgradeService] Upgrade failed', { error: error.message });
+      auditLogger.error('Contract upgrade failed', {
+        fromVersion,
+        toVersion: newVersion,
+        error: error.message,
+        migrationsRun
+      });
       return {
         success: false,
         fromVersion,
@@ -266,6 +286,11 @@ class ContractUpgradeService {
       this.currentVersion = targetVersion;
 
       logger.info('[UpgradeService] Rollback complete', { to: targetVersion });
+      auditLogger.security('Contract rolled back to previous version', {
+        fromVersion,
+        toVersion: targetVersion,
+        snapshotRestored: !!relevantSnapshot
+      });
 
       return {
         success: true,
