@@ -87,9 +87,9 @@ export class FeeEstimationService {
       // Fallback to base fee
       return {
         minFee: parseInt(BASE_FEE),
-        recommendedFee: parseInt(BASE_FEE) * 2,
-        p50Fee: parseInt(BASE_FEE) * 3,
-        p90Fee: parseInt(BASE_FEE) * 5
+        recommendedFee: parseInt(BASE_FEE) * 15,
+        p50Fee: parseInt(BASE_FEE) * 50,
+        p90Fee: parseInt(BASE_FEE) * 100
       };
     }
   }
@@ -179,7 +179,7 @@ export class FeeEstimationService {
         baseFee: parseInt(BASE_FEE),
         totalFee: parseInt(BASE_FEE) / 10000000,
         minFee: parseInt(BASE_FEE) / 10000000,
-        recommendedFee: (parseInt(BASE_FEE) * 2) / 10000000,
+        recommendedFee: (parseInt(BASE_FEE) * 15) / 10000000,
         operationCount: 1,
         estimatedTime: 5
       };
@@ -191,7 +191,7 @@ export class FeeEstimationService {
    */
   async estimateComplexTransactionFee(
     operations: Operation[],
-    fee: number = parseInt(BASE_FEE) * 2
+    fee: number = parseInt(BASE_FEE) * 15
   ): Promise<FeeEstimate> {
     try {
       const accessResult = await requestAccess();
@@ -233,7 +233,7 @@ export class FeeEstimationService {
         baseFee: fee,
         totalFee: (fee * operations.length) / 10000000,
         minFee: parseInt(BASE_FEE) / 10000000,
-        recommendedFee: (parseInt(BASE_FEE) * 2) / 10000000,
+        recommendedFee: (parseInt(BASE_FEE) * 15) / 10000000,
         operationCount: operations.length,
         estimatedTime: 5
       };
@@ -244,11 +244,10 @@ export class FeeEstimationService {
    * Estimate confirmation time based on fee
    */
   private estimateConfirmationTime(feeStroops: number): number {
-    // Simple heuristic based on fee amount
-    if (feeStroops >= 500) return 3; // High priority
-    if (feeStroops >= 200) return 5; // Medium priority
-    if (feeStroops >= 100) return 10; // Low priority
-    return 15; // Very low priority
+    if (feeStroops >= 5000) return 3;     // Dynamic threshold approximation
+    if (feeStroops >= 1500) return 5;
+    if (feeStroops >= 500) return 10;
+    return 15;
   }
 
   /**
