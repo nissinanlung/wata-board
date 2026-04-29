@@ -1,7 +1,8 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
+import { ThemeProvider } from './context/ThemeContext';
+import { useState, useEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Networks, TransactionBuilder, Operation, Asset, BASE_FEE, Horizon } from '@stellar/stellar-sdk';
+import { Networks, TransactionBuilder, Operation, Asset, BASE_FEE, Horizon, Memo } from '@stellar/stellar-sdk';
 
 // Internal components
 import { ResponsiveNavigation } from './components/ResponsiveNavigation';
@@ -10,44 +11,59 @@ import { OfflineBanner } from './components/OfflineBanner';
 import { OfflineStatusIndicator } from './components/OfflineStatusIndicator';
 import { GDPRConsent } from './components/GDPRConsent';
 import { WalletBalance } from './components/WalletBalance';
+import { WalletSelector } from './components/WalletSelector';
 import { TransactionSuccess } from './components/TransactionSuccess';
 import type { TransactionDetails } from './components/TransactionSuccess';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { GlobalErrorFallback } from './components/GlobalErrorFallback';
-import { AnalyticsDashboard } from './components/Analytics/Dashboard';
 import { logClientError } from './services/errorLoggingService';
 import { TransactionStatus } from './components/TransactionStatus';
+import { QRCodePayment } from './components/QRCodePayment';
 import { useRealtimeTransactions } from './hooks/useRealtimeTransactions';
+import { ProviderSelector } from './components/ProviderSelector';
+import type { UtilityProvider } from './types/provider';
 
 // Hooks & Utils
-import { isConnected, requestAccess, signTransaction } from "./utils/wallet-bridge";
+import { isConnected, requestAccess, signTransaction, setWalletType } from "./utils/wallet-bridge";
 import { getCurrentNetworkConfig, getNetworkFromEnv } from './utils/network-config';
 import { useWalletBalance } from './hooks/useWalletBalance';
 import { useFeeEstimation } from './hooks/useFeeEstimation';
+import { useOfflineSync } from './hooks/useOfflineSync';
 import { handleOfflineError, getOfflineErrorMessage } from './utils/offlineApi';
-
 import { announceToScreenReader, generateId, setupKeyboardNavigation, setupFocusVisible } from './utils/accessibility';
-import { sanitizeAlphanumeric, sanitizeAmount, isValidMeterId, isValidAmount } from './utils/sanitize';
+import { sanitizeAlphanumeric, sanitizeAmount, isValidMeterId } from './utils/sanitize';
 import { logger } from './utils/logger';
+import { paymentEvents } from './utils/paymentEvents';
 
 // Services
 import { SchedulingService } from './services/schedulingService';
 import { NotificationService } from './services/notificationService';
 
-// Pages
-import About from './pages/About';
-import Contact from './pages/Contact';
-import Rate from './pages/Rate';
-import ScheduledPayments from './pages/ScheduledPayments';
-import PrivacyPolicy from './pages/PrivacyPolicy';
-import DataRetentionPolicy from './pages/DataRetentionPolicy';
+//payment receipt
+import { usePaymentReceipt } from "./hooks/usePaymentReceipt";
+import { PaymentReceiptCard } from "./components/PaymentReceiptCard";
 
-function Home() {
+
+// Pages - Lazy loaded for performance
+const About = lazy(() => import('./pages/About'));
+const Contact = lazy(() => import('./pages/Contact'));
+const Rate = lazy(() => import('./pages/Rate'));
+const ScheduledPayments = lazy(() => import('./pages/ScheduledPayments'));
+const QRPaymentHandler = lazy(() => import('./pages/QRPaymentHandler').then(module => ({ default: module.QRPaymentHandler })));
+const PrivacyPolicy = lazy(() => import('./pages/PrivacyPolicy'));
+const DataRetentionPolicy = lazy(() => import('./pages/DataRetentionPolicy'));
+const AnalyticsDashboard = lazy(() => import('./components/Analytics/Dashboard').then(module => ({ default: module.AnalyticsDashboard })));
+const RealTimeMonitoringDashboard = lazy(() => import('./components/RealTimeMonitoringDashboard'));
+
+const Home = memo(() => {
   const { t } = useTranslation();
   const [meterId, setMeterId] = useState('');
   const [amount, setAmount] = useState('');
+  const [memoText, setMemoText] = useState('');
   const [status, setStatus] = useState('');
   const [transactionDetails, setTransactionDetails] = useState<TransactionDetails | null>(null);
+  const [paymentType, setPaymentType] = useState<'manual' | 'qr'>('manual');
+  const [selectedProvider, setSelectedProvider] = useState<UtilityProvider | null>(null);
   const { connectionState, transactionState, lastUpdated, error: transactionUpdateError } = useRealtimeTransactions(transactionDetails?.hash);
 
   const networkConfig = getCurrentNetworkConfig();
@@ -57,6 +73,7 @@ function Home() {
   // Generate unique IDs for accessibility
   const meterInputId = useRef(generateId('meter-input'));
   const amountInputId = useRef(generateId('amount-input'));
+  const memoInputId = useRef(generateId('memo-input'));
   const payButtonId = useRef(generateId('pay-button'));
   const statusId = useRef(generateId('status-message'));
 
@@ -67,13 +84,12 @@ function Home() {
     }
   }, [amount, estimateFee]);
 
-  const handlePayment = async (e?: React.FormEvent) => {
+  const handlePayment = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    
+
     try {
       logger.info('Payment process initiated', { meterId: sanitizeAlphanumeric(meterId, 50), amount });
       const result = await isConnected();
-      logger.debug('Wallet connection status checked', { result });
       if (!result.isConnected) {
         setStatus(t('payment.status.installWallet'));
         announceToScreenReader(t('payment.status.installWallet'));
@@ -88,16 +104,15 @@ function Home() {
       }
 
       if (!isValidMeterId(meterId)) {
-        setStatus(t('payment.status.invalidMeter') || 'Meter ID may only contain letters, numbers, hyphens, and underscores (3–50 chars).');
+        setStatus(t('payment.status.invalidMeter') || 'Invalid meter ID format.');
         announceToScreenReader(t('payment.status.invalidMeter') || 'Invalid meter ID format.');
         document.getElementById(meterInputId.current)?.focus();
         return;
       }
 
-      // Sanitize once and use the clean value everywhere
       const sanitizedMeterId = sanitizeAlphanumeric(meterId, 50);
-
       const parsedAmount = sanitizeAmount(amount);
+
       if (Number.isNaN(parsedAmount) || parsedAmount <= 0) {
         setStatus(t('payment.status.enterValidAmount'));
         announceToScreenReader(t('payment.status.enterValidAmount'));
@@ -105,14 +120,10 @@ function Home() {
         return;
       }
 
-      // Floor to integer for the contract — must still be > 0 after flooring
+      const { receipt, isReceiptVisible, triggerReceipt, closeReceipt } =
+        usePaymentReceipt({ stellarAccount: walletPublicKey });
+
       const amountU32 = Math.floor(parsedAmount);
-      if (amountU32 <= 0) {
-        setStatus(t('payment.status.enterValidAmount'));
-        announceToScreenReader(t('payment.status.enterValidAmount'));
-        document.getElementById(amountInputId.current)?.focus();
-        return;
-      }
 
       if (!isSufficientBalance(amountU32)) {
         setStatus(t('payment.status.insufficientBalance'));
@@ -120,66 +131,93 @@ function Home() {
         return;
       }
 
-      // Create and sign transaction
       const accessResult = await requestAccess();
       if (accessResult.error || !accessResult.address) {
-        throw new Error(accessResult.error || 'Wallet access denied');
+        throw new Error(accessResult.error || `We couldn't access your wallet.`);
       }
       const pubKeyString = accessResult.address;
 
       const horizonUrl = networkConfig.rpcUrl.replace('soroban', 'horizon');
       const server = new Horizon.Server(horizonUrl);
-      
-      let account;
-      if ((window as any).__MOCK_STELLAR_ACCOUNT__) {
-        account = (window as any).__MOCK_STELLAR_ACCOUNT__(pubKeyString);
-      } else {
-        account = await server.loadAccount(pubKeyString);
+
+      const account = await server.loadAccount(pubKeyString);
+      const transactionBuilder = new TransactionBuilder(account, {
+        fee: feeEstimate ? feeEstimate.baseFee.toString() : BASE_FEE,
+        networkPassphrase: networkConfig.networkPassphrase,
+      })
+        .addOperation(Operation.payment({
+          destination: "GDOPTS553GBKXNF3X4YCQ7NPZUQ644QAN4SV7JEZHAVOVROAUQTSKEHO",
+          asset: Asset.native(),
+          amount: amountU32.toString(),
+        }))
+        .setTimeout(30);
+
+      if (memoText.trim()) {
+        transactionBuilder.addMemo(Memo.text(memoText.trim()));
       }
 
-      let transaction;
-      if ((window as any).__MOCK_STELLAR_TRANSACTION__) {
-        transaction = (window as any).__MOCK_STELLAR_TRANSACTION__(account, amountU32);
-      } else {
-        transaction = new TransactionBuilder(account, {
-          fee: BASE_FEE,
-          networkPassphrase: networkConfig.networkPassphrase,
-        })
-          .addOperation(Operation.payment({
-            destination: "GDOPTS553GBKXNF3X4YCQ7NPZUQ644QAN4SV7JEZHAVOVROAUQTSKEHO",
-            asset: Asset.native(),
-            amount: amountU32.toString(),
-          }))
-          .setTimeout(30)
-          .build();
-      }
+      const transaction = transactionBuilder.build();
 
       const signedResponse = await signTransaction(transaction.toXDR());
       const signedXdr = typeof signedResponse === 'string' ? signedResponse : (signedResponse as any).signedTxXdr;
 
-      const submitResult = await server.submitTransaction(signedXdr);
+      const submitWithRetry = async () => {
+        let lastError: unknown;
+        const maxAttempts = 4;
+
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+          try {
+            const result = await server.submitTransaction(signedXdr);
+            return result;
+          } catch (submissionError) {
+            lastError = submissionError;
+            const message = submissionError instanceof Error ? submissionError.message.toLowerCase() : String(submissionError).toLowerCase();
+            const retryable =
+              message.includes('timeout') ||
+              message.includes('network') ||
+              message.includes('rate') ||
+              message.includes('congestion') ||
+              message.includes('tx_insufficient_fee') ||
+              message.includes('503');
+
+            if (!retryable || attempt === maxAttempts - 1) {
+              break;
+            }
+
+            const delayMs = Math.min(1000 * (2 ** attempt), 8000);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+          }
+        }
+
+        throw lastError instanceof Error ? lastError : new Error('Transaction submission failed');
+      };
+
+      const submitResult = await submitWithRetry();
 
       setStatus(t('payment.status.paymentSuccess', { id: (submitResult as any).hash.slice(0, 10) }));
       announceToScreenReader(t('payment.status.paymentSuccess', { id: (submitResult as any).hash.slice(0, 10) }));
-      
+
       setTransactionDetails({
         hash: submitResult.hash,
         meterId: sanitizedMeterId,
         amount: amountU32,
+        memo: memoText.trim() || undefined,
         timestamp: new Date(),
         network: getNetworkFromEnv(),
         explorerUrl: networkConfig.explorerUrl
       });
-      
-      logger.audit('Payment transaction successful', { 
-        hash: submitResult.hash, 
-        meterId: sanitizedMeterId, 
-        amount: amountU32 
-      });
 
       setMeterId('');
       setAmount('');
-      setTimeout(() => refreshBalance(), 2000);
+      setMemoText('');
+      
+      // Emit payment completion event for automatic balance refresh
+      paymentEvents.emitPaymentCompleted({
+        transactionId: submitResult.hash,
+        amount: amountU32,
+        meterId: sanitizedMeterId,
+        source: 'manual_payment'
+      });
 
     } catch (err: any) {
       logger.error('Payment processing failed', err, { meterId, amount });
@@ -193,33 +231,45 @@ function Home() {
         announceToScreenReader(errorMessage);
       }
     }
-  };
+  }, [meterId, amount, t, isSufficientBalance, estimateFee, networkConfig]);
 
   const isProcessing = status === t('payment.form.processing');
 
   return (
     <main id="main-content" role="main" aria-labelledby="app-title">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 sm:py-8 lg:py-10">
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 sm:p-6 lg:p-8 shadow-xl shadow-black/20">
+        <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/40 p-4 sm:p-6 lg:p-8 shadow-xl shadow-black/10 dark:shadow-black/20">
           <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div>
-              <h1 id="app-title" className="text-2xl sm:text-3xl lg:text-4xl font-semibold tracking-tight">{t('app.title')}</h1>
-              <p className="mt-2 max-w-prose text-sm text-slate-300">
+              <h1 id="app-title" className="text-2xl sm:text-3xl lg:text-4xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">{t('app.title')}</h1>
+              <p className="mt-2 max-w-prose text-sm text-slate-600 dark:text-slate-300">
                 {t('app.tagline')}
               </p>
             </div>
             <div className="flex items-center gap-3">
               <OfflineStatusIndicator variant="compact" />
               <div className={`rounded-full px-3 py-1 text-xs font-medium ring-1 ring-inset shrink-0 ${networkConfig.networkPassphrase === Networks.PUBLIC
-                ? 'bg-orange-500/10 text-orange-300 ring-orange-500/20'
-                : 'bg-sky-500/10 text-sky-300 ring-sky-500/20'
-                }`} role="status" aria-live="polite" aria-label={`Current network: ${networkConfig.networkPassphrase === Networks.PUBLIC ? 'Mainnet' : 'Testnet'}`}>
+                ? 'bg-orange-500/10 text-orange-600 dark:text-orange-300 ring-orange-500/20'
+                : 'bg-sky-500/10 text-sky-600 dark:text-sky-300 ring-sky-500/20'
+                }`} role="status" aria-live="polite">
                 {networkConfig.networkPassphrase === Networks.PUBLIC ? t('network.mainnet') : t('network.testnet')}
               </div>
             </div>
           </header>
 
-          <WalletBalance className="mt-6" />
+          <div className="mt-6 space-y-4">
+            <WalletSelector
+              onWalletConnected={(_, walletType) => {
+                setWalletType(walletType);
+                setStatus(t('payment.status.walletConnected'));
+              }}
+              onWalletError={(error) => {
+                setStatus(t('payment.status.walletError', { error }));
+              }}
+              showLabel={true}
+            />
+            <WalletBalance className="mt-2" />
+          </div>
 
           {transactionDetails ? (
             <>
@@ -230,149 +280,233 @@ function Home() {
                 lastUpdated={lastUpdated}
                 error={transactionUpdateError}
               />
-              <TransactionSuccess 
-                details={transactionDetails} 
+              <TransactionSuccess
+                details={transactionDetails}
                 onReset={() => {
                   setTransactionDetails(null);
                   setStatus('');
-                }} 
+                }}
               />
             </>
           ) : (
-            <form onSubmit={handlePayment} className="mt-8 space-y-6" aria-labelledby="payment-form-title">
-              <h2 id="payment-form-title" className="sr-only">Payment Details Form</h2>
-              {/* Fee Estimation Display */}
-              {feeEstimate && (
-                <section className="rounded-xl border border-slate-800 bg-slate-950/40 p-4" aria-labelledby="fee-estimation">
-                  <h3 id="fee-estimation" className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    {t('payment.feeEstimation.title')} {isEstimatingFee && t('payment.feeEstimation.calculating')}
-                  </h3>
-                  <div className="mt-2 text-sm text-slate-100">
-                    {isEstimatingFee ? t('payment.feeEstimation.calculatingFees') : `${t('payment.feeEstimation.estimatedNetworkFee')}: ${feeEstimate.totalFee} XLM`}
+            <div className="mt-8 space-y-6" aria-labelledby="payment-form-title">
+              <h2 id="payment-form-title" className="sr-only">Payment Options</h2>
+
+              <div className="border-b border-slate-200 dark:border-slate-800">
+                <nav className="-mb-px flex space-x-8" aria-label="Payment type">
+                  <button
+                    onClick={() => setPaymentType('manual')}
+                    className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${paymentType === 'manual'
+                        ? 'border-sky-500 text-sky-600 dark:text-sky-400'
+                        : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                      }`}
+                    aria-selected={paymentType === 'manual'}
+                    role="tab"
+                  >
+                    {t('payment.manual.tab')}
+                  </button>
+                  <button
+                    onClick={() => setPaymentType('qr')}
+                    className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${paymentType === 'qr'
+                        ? 'border-sky-500 text-sky-600 dark:text-sky-400'
+                        : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
+                      }`}
+                    aria-selected={paymentType === 'qr'}
+                    role="tab"
+                  >
+                    {t('payment.qr.tab')}
+                  </button>
+                </nav>
+              </div>
+
+              {paymentType === 'manual' ? (
+                <form onSubmit={handlePayment} className="space-y-6">
+                  {feeEstimate && (
+                    <section className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40 p-4" aria-labelledby="fee-estimation">
+                      <h3 id="fee-estimation" className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        {t('payment.feeEstimation.title')} {isEstimatingFee && t('payment.feeEstimation.calculating')}
+                      </h3>
+                      <div className="mt-2 text-sm text-slate-800 dark:text-slate-100">
+                        {isEstimatingFee ? t('payment.feeEstimation.calculatingFees') : `${t('payment.feeEstimation.estimatedNetworkFee')}: ${feeEstimate.totalFee} XLM`}
+                      </div>
+                    </section>
+                  )}
+
+                  <div className="space-y-4">
+                    <ProviderSelector
+                      selectedProviderId={selectedProvider?.id}
+                      onProviderSelect={setSelectedProvider}
+                      disabled={isProcessing}
+                      className="w-full"
+                    />
+                    <div className="relative">
+                      <label htmlFor={meterInputId.current} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 ml-1">
+                        {t('payment.form.meterNumber')}
+                      </label>
+                      <input
+                        id={meterInputId.current}
+                        type="text"
+                        value={meterId}
+                        onChange={(e) => setMeterId(e.target.value)}
+                        placeholder={t('payment.form.meterPlaceholder')}
+                        className="h-12 w-full rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 text-slate-900 dark:text-slate-100 placeholder-slate-400 ring-sky-500/20 transition-all focus:border-sky-500/50 focus:outline-none focus:ring-4"
+                        disabled={isProcessing}
+                        autoComplete="off"
+                        aria-required="true"
+                      />
+                    </div>
+
+                    <div className="relative">
+                      <label htmlFor={amountInputId.current} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 ml-1">
+                        {t('payment.form.amount')} (XLM)
+                      </label>
+                      <input
+                        id={amountInputId.current}
+                        type="number"
+                        value={amount}
+                        onChange={(e) => setAmount(e.target.value)}
+                        placeholder="0.00"
+                        className="h-12 w-full rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 text-slate-900 dark:text-slate-100 placeholder-slate-400 ring-sky-500/20 transition-all focus:border-sky-500/50 focus:outline-none focus:ring-4"
+                        disabled={isProcessing}
+                        aria-required="true"
+                        step="any"
+                      />
+                    </div>
+
+                    <div className="relative">
+                      <label htmlFor={memoInputId.current} className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5 ml-1">
+                        {t('payment.form.memo')}
+                      </label>
+                      <input
+                        id={memoInputId.current}
+                        type="text"
+                        value={memoText}
+                        onChange={(e) => setMemoText(e.target.value)}
+                        placeholder={t('payment.form.memoPlaceholder')}
+                        className="h-12 w-full rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-950 px-4 text-slate-900 dark:text-slate-100 placeholder-slate-400 ring-sky-500/20 transition-all focus:border-sky-500/50 focus:outline-none focus:ring-4"
+                        disabled={isProcessing}
+                        maxLength={28}
+                      />
+                      <p className="mt-1 text-[10px] text-slate-500 ml-1">{t('payment.form.memoDescription')}</p>
+                    </div>
                   </div>
-                </section>
+
+                  <div className="flex flex-col gap-4">
+                    <button
+                      id={payButtonId.current}
+                      type="submit"
+                      disabled={isProcessing}
+                      className="relative h-14 w-full overflow-hidden rounded-xl bg-sky-600 px-6 font-semibold text-white transition-all hover:bg-sky-500 active:scale-[0.98] disabled:opacity-50 shadow-lg shadow-sky-500/20"
+                      aria-busy={isProcessing}
+                    >
+                      <div className="flex items-center justify-center gap-2">
+                        {isProcessing && (
+                          <svg className="h-5 w-5 animate-spin text-white" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                        )}
+                        <span>{isProcessing ? t('payment.form.processing') : t('payment.form.payButton')}</span>
+                      </div>
+                    </button>
+
+                    <div
+                      id={statusId.current}
+                      role="status"
+                      aria-live="polite"
+                      className={`min-h-[1.5rem] px-1 text-center text-sm font-medium ${status.includes('success') ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'}`}
+                    >
+                      {status || ''}
+                    </div>
+                  </div>
+                </form>
+              ) : (
+                <QRCodePayment
+                  onPaymentComplete={(transactionId) => {
+                    setStatus(t('payment.status.paymentSuccess', { id: transactionId.slice(0, 10) }));
+                    announceToScreenReader(t('payment.status.paymentSuccess', { id: transactionId.slice(0, 10) }));
+                    setPaymentType('manual');
+                  }}
+                  onError={(error) => {
+                    setStatus(error);
+                    announceToScreenReader(error);
+                  }}
+                />
               )}
-
-              <div className="space-y-4">
-                <div className="relative">
-                  <label htmlFor={meterInputId.current} className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">
-                    {t('payment.form.meterNumber')}
-                  </label>
-                  <input
-                    id={meterInputId.current}
-                    type="text"
-                    value={meterId}
-                    onChange={(e) => setMeterId(e.target.value)}
-                    placeholder={t('payment.form.meterPlaceholder')}
-                    className="h-12 w-full rounded-xl border border-slate-800 bg-slate-950 px-4 text-slate-100 placeholder-slate-400 ring-sky-500/20 transition-all focus:border-sky-500/50 focus:outline-none focus:ring-4"
-                    disabled={isProcessing}
-                    autoComplete="off"
-                    aria-required="true"
-                  />
-                </div>
-
-                <div className="relative">
-                  <label htmlFor={amountInputId.current} className="block text-sm font-medium text-slate-300 mb-1.5 ml-1">
-                    {t('payment.form.amount')} (XLM)
-                  </label>
-                  <input
-                    id={amountInputId.current}
-                    type="number"
-                    value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
-                    placeholder="0.00"
-                    className="h-12 w-full rounded-xl border border-slate-800 bg-slate-950 px-4 text-slate-100 placeholder-slate-400 ring-sky-500/20 transition-all focus:border-sky-500/50 focus:outline-none focus:ring-4"
-                    disabled={isProcessing}
-                    aria-required="true"
-                    step="any"
-                  />
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-4">
-                <button
-                  id={payButtonId.current}
-                  type="submit"
-                  disabled={isProcessing}
-                  className="relative h-14 w-full overflow-hidden rounded-xl bg-sky-500 px-6 font-semibold text-white transition-all hover:bg-sky-400 active:scale-[0.98] disabled:opacity-50"
-                  aria-busy={isProcessing}
-                >
-                  <div className="flex items-center justify-center gap-2">
-                    {isProcessing && (
-                      <svg className="h-5 w-5 animate-spin text-white" fill="none" viewBox="0 0 24 24" aria-hidden="true">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                    )}
-                    <span>{isProcessing ? t('payment.form.processing') : t('payment.form.payButton')}</span>
-                  </div>
-                </button>
-
-                <div 
-                  id={statusId.current}
-                  role="status" 
-                  aria-live="polite"
-                  className={`min-h-[1.5rem] px-1 text-center text-sm font-medium ${status.includes('success') ? 'text-green-400' : 'text-amber-400'}`}
-                >
-                  {status}
-                </div>
-              </div>
-            </form>
+            </div>
           )}
         </div>
 
-        <footer className="mt-12 text-center text-xs text-slate-500">
-          <p className="mb-2">© {new Date().getFullYear()} Wata-Board. {t('app.footer.tagline')}</p>
+        <footer className="mt-12 text-center text-xs text-slate-400 dark:text-slate-500">
+          <p className="mb-2"> {new Date().getFullYear()} Wata-Board. {t('app.footer.tagline')}</p>
           <div className="flex justify-center gap-4">
-            <a href="/privacy-policy" className="hover:text-sky-400 transition-colors">Privacy Policy</a>
-            <a href="/retention-policy" className="hover:text-sky-400 transition-colors">Data Retention Policy</a>
+            <a href="/privacy-policy" className="hover:text-sky-500 transition-colors">{t('app.footer.privacyPolicy')}</a>
+            <a href="/retention-policy" className="hover:text-sky-500 transition-colors">{t('app.footer.dataRetentionPolicy')}</a>
           </div>
         </footer>
       </div>
     </main>
   );
-}
+});
 
 export default function App() {
+  useOfflineSync();
+
   useEffect(() => {
     setupKeyboardNavigation();
     setupFocusVisible();
-    
-    const schedulingService = SchedulingService.getInstance();
+    SchedulingService.getInstance();
     NotificationService.getInstance();
-    
-    const processInterval = setInterval(() => {
-      schedulingService.processScheduledPayments();
-    }, 60000);
-
-    return () => clearInterval(processInterval);
   }, []);
 
   return (
-    <Router>
-      <ErrorBoundary
-        FallbackComponent={GlobalErrorFallback}
-        onError={(error, errorInfo) => logClientError(error, errorInfo.componentStack, { module: 'App' })}
-      >
-        <div className="app-container min-h-screen bg-slate-950">
-          <SkipLinks />
-          <OfflineBanner />
-          <ResponsiveNavigation />
-          
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/about" element={<About />} />
-            <Route path="/contact" element={<Contact />} />
-            <Route path="/rate" element={<Rate />} />
-            <Route path="/schedules" element={<ScheduledPayments />} />
-            <Route path="/analytics" element={<AnalyticsDashboard />} />
-            <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-            <Route path="/retention-policy" element={<DataRetentionPolicy />} />
-          </Routes>
-          <GDPRConsent />
-        </div>
-      </ErrorBoundary>
+    <ThemeProvider>
+      <Router>
+        <ErrorBoundary
+          FallbackComponent={GlobalErrorFallback}
+          onError={(error, errorInfo) => logClientError(error, errorInfo?.componentStack || '', { module: 'App' })}
+        >
+          <div className="app-container min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 transition-colors duration-200">
+            <SkipLinks />
+            <OfflineBanner />
+            <ResponsiveNavigation />
 
-    </Router>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/about" element={<Suspense fallback={<div>{t('app.loading')}</div>}><About /></Suspense>} />
+              <Route path="/contact" element={<Suspense fallback={<div>{t('app.loading')}</div>}><Contact /></Suspense>} />
+              <Route path="/rate" element={<Suspense fallback={<div>{t('app.loading')}</div>}><Rate /></Suspense>} />
+              <Route path="/schedules" element={<Suspense fallback={<div>{t('app.loading')}</div>}><ScheduledPayments /></Suspense>} />
+              <Route path="/analytics" element={<Suspense fallback={<div>{t('app.loading')}</div>}><AnalyticsDashboard /></Suspense>} />
+              <Route path="/monitoring" element={<Suspense fallback={<div>{t('app.loading')}</div>}><RealTimeMonitoringDashboard /></Suspense>} />
+              <Route path="/privacy-policy" element={<Suspense fallback={<div>{t('app.loading')}</div>}><PrivacyPolicy /></Suspense>} />
+              <Route path="/retention-policy" element={<Suspense fallback={<div>{t('app.loading')}</div>}><DataRetentionPolicy /></Suspense>} />
+              <Route path="/payment" element={<Suspense fallback={<div>{t('app.loading')}</div>}><QRPaymentHandler /></Suspense>} />
+            </Routes>
+            <GDPRConsent />
+          </div>
+        </ErrorBoundary>
+      </Router>
+    </ThemeProvider>
   );
+}
+// After a successful pay_bill transaction:
+triggerReceipt({
+  transactionHash: txResult.hash,
+  meterId: formValues.meterId,
+  meterType: "water",          // or "electricity"
+  amountPaid: formValues.amount,
+  billingPeriod: "May 2025",
+  status: "confirmed",
+});
+
+// In JSX:
+{
+  isReceiptVisible && receipt && (
+    <PaymentReceiptCard
+      receipt={receipt}
+      onClose={closeReceipt}
+      onNewPayment={() => { closeReceipt(); resetForm(); }}
+    />
+  )
 }
