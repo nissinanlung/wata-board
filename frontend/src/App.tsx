@@ -1,8 +1,6 @@
 console.log('[App] App.tsx execution started');
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider } from './context/ThemeContext';
-import { useState, useEffect, useRef } from 'react';
-import { useState, useEffect, useRef, useCallback, useMemo, memo, lazy, Suspense } from 'react';
 import { useState, useRef, useEffect, useCallback, memo, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Networks, TransactionBuilder, Operation, Asset, BASE_FEE, Horizon } from '@stellar/stellar-sdk';
