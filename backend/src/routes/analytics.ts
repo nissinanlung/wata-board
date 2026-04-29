@@ -70,6 +70,29 @@ router.get("/system", async (req, res) => {
 });
 
 /**
+ * GET /api/analytics/payments/dashboard
+ * Get payment analytics dashboard insights
+ */
+router.get("/payments/dashboard", async (_req, res) => {
+  try {
+    const analytics = await analyticsService.getPaymentDashboardAnalytics();
+
+    logger.info("Payment dashboard analytics retrieved");
+    return res.status(200).json({
+      success: true,
+      data: analytics,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    logger.error("Failed to retrieve payment dashboard analytics", { error });
+    return res.status(500).json({
+      success: false,
+      error: "Failed to retrieve payment dashboard analytics",
+    });
+  }
+});
+
+/**
  * GET /api/analytics/predictive/:userId
  * Get predictive insights for a user
  */
