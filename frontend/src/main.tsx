@@ -27,6 +27,11 @@ registerServiceWorker().then((result) => {
 
     // Cleanup on page unload
     window.addEventListener('beforeunload', cleanup);
+    
+    // Return cleanup function to remove event listener
+    return () => {
+      window.removeEventListener('beforeunload', cleanup);
+    };
   } else {
     console.warn('[Main] Service worker registration failed:', result.error);
   }

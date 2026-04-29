@@ -60,13 +60,32 @@ const RealTimeMonitoringDashboard: React.FC = () => {
     connectWebSocket();
     return () => {
       if (ws.current) {
-        ws.current.close();
+        // Clean up event handlers
+        ws.current.onopen = null;
+        ws.current.onmessage = null;
+        ws.current.onclose = null;
+        ws.current.onerror = null;
+        
+        if (ws.current.readyState === WebSocket.OPEN) {
+          ws.current.close();
+        }
       }
     };
   }, []);
 
   const connectWebSocket = () => {
     try {
+      // Clean up existing connection if any
+      if (ws.current) {
+        ws.current.onopen = null;
+        ws.current.onmessage = null;
+        ws.current.onclose = null;
+        ws.current.onerror = null;
+        if (ws.current.readyState === WebSocket.OPEN) {
+          ws.current.close();
+        }
+      }
+
       ws.current = new WebSocket('ws://localhost:8080');
       
       ws.current.onopen = () => {

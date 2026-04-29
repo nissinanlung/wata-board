@@ -35,6 +35,12 @@ export function useRealtimeTransactions(transactionId?: string) {
     let socket: WebSocket | null = null;
     let pollTimer: number | null = null;
     let isMounted = true;
+    
+    // Define handlers outside try block so they're accessible in cleanup
+    let handleOpen: (() => void) | null = null;
+    let handleMessage: ((messageEvent: MessageEvent) => void) | null = null;
+    let handleClose: (() => void) | null = null;
+    let handleError: ((event: Event) => void) | null = null;
 
     const updateState = (nextState: TransactionState) => {
       if (!isMounted) return;
@@ -73,12 +79,13 @@ export function useRealtimeTransactions(transactionId?: string) {
 
     try {
       socket = new WebSocket(websocketUrl);
-      socket.addEventListener('open', () => {
+      
+      handleOpen = () => {
         if (!isMounted) return;
         setConnectionState('connected');
-      });
+      };
 
-      socket.addEventListener('message', (messageEvent) => {
+      handleMessage = (messageEvent: MessageEvent) => {
         try {
           const payload = JSON.parse(messageEvent.data as string);
           if (payload?.type === 'transaction-status' && payload?.transactionId === transactionId) {
@@ -87,15 +94,15 @@ export function useRealtimeTransactions(transactionId?: string) {
         } catch (parseError) {
           console.warn('[RealtimeTransactions] Invalid websocket response', parseError);
         }
-      });
+      };
 
-      socket.addEventListener('close', () => {
+      handleClose = () => {
         if (!isMounted) return;
         setConnectionState('disconnected');
         startPolling();
-      });
+      };
 
-      socket.addEventListener('error', (event) => {
+      handleError = () => {
         if (!isMounted) return;
         setError('WebSocket connection failed, falling back to polling.');
         setConnectionState('fallback');
@@ -103,7 +110,12 @@ export function useRealtimeTransactions(transactionId?: string) {
           socket.close();
         }
         startPolling();
-      });
+      };
+
+      socket.addEventListener('open', handleOpen);
+      socket.addEventListener('message', handleMessage);
+      socket.addEventListener('close', handleClose);
+      socket.addEventListener('error', handleError);
     } catch (wsError) {
       setError('Unable to open live transaction channel.');
       startPolling();
@@ -111,8 +123,16 @@ export function useRealtimeTransactions(transactionId?: string) {
 
     return () => {
       isMounted = false;
-      if (socket && socket.readyState === WebSocket.OPEN) {
-        socket.close();
+      if (socket) {
+        // Remove event listeners before closing
+        if (handleOpen) socket.removeEventListener('open', handleOpen);
+        if (handleMessage) socket.removeEventListener('message', handleMessage);
+        if (handleClose) socket.removeEventListener('close', handleClose);
+        if (handleError) socket.removeEventListener('error', handleError);
+        
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
       }
       if (pollTimer) {
         window.clearInterval(pollTimer);

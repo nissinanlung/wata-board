@@ -420,11 +420,18 @@ const Home = memo(() => {
 
 export default function App() {
   useEffect(() => {
-    setupKeyboardNavigation();
-    setupFocusVisible();
-    // ...
+    const keyboardCleanup = setupKeyboardNavigation();
+    const focusCleanup = setupFocusVisible();
+    
+    // Initialize services
     SchedulingService.getInstance();
     NotificationService.getInstance();
+    
+    // Return cleanup function
+    return () => {
+      if (typeof keyboardCleanup === 'function') keyboardCleanup();
+      if (typeof focusCleanup === 'function') focusCleanup();
+    };
   }, []);
 
   return (
