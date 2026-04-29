@@ -1,12 +1,10 @@
 import React from 'react';
-import { 
-  BaseError, 
-  ErrorFactory, 
-  ErrorUtils, 
-  ErrorCategory,
-  ErrorSeverity,
+import type { 
+  ErrorCategory as ErrorCategoryType,
+  ErrorSeverity as ErrorSeverityType,
   ErrorContext 
 } from '../../../shared/src/errors/standardError';
+import { BaseError, ErrorFactory, ErrorUtils, ErrorCategory, ErrorSeverity } from '../../../shared/src/errors/standardError';
 
 /**
  * Standardized error handling utilities for frontend
@@ -18,6 +16,8 @@ export interface ClientErrorContext extends ErrorContext {
   userAgent?: string;
   url?: string;
   timestamp?: string;
+  componentStack?: string | null;
+  source?: string;
 }
 
 /**
@@ -49,9 +49,12 @@ export class FrontendErrorHandler {
     } else {
       standardError = ErrorFactory.wrap(error, ErrorCategory.SYSTEM, {
         ...context,
-        userAgent: navigator.userAgent,
-        url: window.location.href,
-        timestamp: new Date().toISOString()
+        metadata: {
+          ...context.metadata,
+          userAgent: navigator.userAgent,
+          url: window.location.href,
+          timestamp: new Date().toISOString()
+        }
       });
     }
 

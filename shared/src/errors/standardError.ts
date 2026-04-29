@@ -29,7 +29,7 @@ export interface StandardError {
   category: ErrorCategory;
   severity: ErrorSeverity;
   timestamp: string;
-  context?: Record<string, unknown>;
+  context?: ErrorContext;
   stack?: string;
   userId?: string;
   requestId?: string;

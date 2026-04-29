@@ -1,4 +1,4 @@
-import { SearchFilters } from '../hooks/usePaymentSearch';
+import type { SearchFilters } from '../hooks/usePaymentSearch';
 import { sanitizeSearchQuery, sanitizeDate, clamp } from '../utils/sanitize';
 
 export class SearchService {

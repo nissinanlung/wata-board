@@ -50,6 +50,13 @@ export interface FrontendReceiptData {
   walletAddress?: string;
   blockchainHash?: string;
   notes?: string;
+  billPeriod?: {
+    start: Date;
+    end: Date;
+  };
+  payerName?: string;
+  payerAddress?: string;
+  providerName?: string;
 }
 
 // Helper functions for date conversion between frontend Date objects and standardized ISO strings

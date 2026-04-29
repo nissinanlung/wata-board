@@ -102,7 +102,7 @@ export const WalletBalance: React.FC<WalletBalanceProps> = (props) => {
   return (
     <div className={`rounded-xl border border-brand-surface-high bg-brand-surface-low/40 p-4 ${className}`} aria-busy={isLoading}>
       {/* Main Balance Display */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-3 gap-3">
         <div>
           <div className="text-xs font-semibold uppercase tracking-wide text-brand-text-secondary mb-1">
             Wallet Balance

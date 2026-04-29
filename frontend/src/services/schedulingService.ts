@@ -1,10 +1,11 @@
-import { PaymentSchedule, ScheduleFormData, CreateScheduleResponse, ScheduleValidationResult, PaymentConflict, ConflictDetectionResult, PaymentFrequency, PaymentStatus } from '../types/scheduling';
+import type { PaymentSchedule, ScheduleFormData, CreateScheduleResponse, ScheduleValidationResult, PaymentConflict, ConflictDetectionResult, GetSchedulesResponse } from '../types/scheduling';
+import { PaymentFrequency, PaymentStatus } from '../types/scheduling';
 
 export class SchedulingService {
   private static instance: SchedulingService;
   private storageKey = 'wata-board-schedules';
 
-  private constructor() {}
+  private constructor() { }
 
   public static getInstance(): SchedulingService {
     if (!SchedulingService.instance) {
@@ -13,12 +14,12 @@ export class SchedulingService {
     return SchedulingService.instance;
   }
 
-  async getUserSchedules(userId: string): Promise<CreateScheduleResponse> {
+  async getUserSchedules(userId: string): Promise<GetSchedulesResponse> {
     try {
       const data = localStorage.getItem(this.storageKey);
       const allSchedules: PaymentSchedule[] = data ? JSON.parse(data) : [];
       const userSchedules = allSchedules.filter(s => s.userId === userId);
-      
+
       // Mock analytics calculation
       const analytics = {
         activeSchedules: userSchedules.filter(s => s.status === 'scheduled').length,
@@ -28,7 +29,7 @@ export class SchedulingService {
         nextPaymentDate: userSchedules[0]?.nextPaymentDate || new Date().toISOString()
       };
 
-      return { success: true, schedules: userSchedules, analytics };
+      return { success: true, schedules: userSchedules, analytics: analytics as any };
     } catch (error) {
       return { success: false, error: 'Failed to retrieve schedules' };
     }
@@ -40,10 +41,14 @@ export class SchedulingService {
         id: `sched_${Date.now()}`,
         userId,
         ...data,
-        status: 'scheduled' as any,
+        amount: parseFloat(data.amount),
+        maxPayments: data.maxPayments ? parseInt(data.maxPayments) : undefined,
+        status: PaymentStatus.SCHEDULED as any,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         currentPaymentCount: 0,
-        nextPaymentDate: data.startDate
+        nextPaymentDate: data.startDate,
+        paymentHistory: []
       };
 
       const existing = localStorage.getItem(this.storageKey);
@@ -51,7 +56,7 @@ export class SchedulingService {
       schedules.push(newSchedule);
       localStorage.setItem(this.storageKey, JSON.stringify(schedules));
 
-      return { success: true, schedules: [newSchedule] };
+      return { success: true, schedule: newSchedule };
     } catch (error) {
       return { success: false, error: 'Failed to create schedule' };
     }
@@ -71,7 +76,7 @@ export class SchedulingService {
       return { success: false, error: 'Failed to cancel schedule' };
     }
   }
-<<<<<<< HEAD
+
 
   validateSchedule(formData: ScheduleFormData): ScheduleValidationResult {
     const errors: any[] = [];
@@ -96,7 +101,7 @@ export class SchedulingService {
       const startDate = new Date(formData.startDate);
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
-      
+
       if (startDate < tomorrow) {
         errors.push({ field: 'startDate', message: 'Start date must be at least tomorrow' });
       }
@@ -105,7 +110,7 @@ export class SchedulingService {
     if (formData.endDate && formData.startDate) {
       const startDate = new Date(formData.startDate);
       const endDate = new Date(formData.endDate);
-      
+
       if (endDate <= startDate) {
         errors.push({ field: 'endDate', message: 'End date must be after start date' });
       }
@@ -116,8 +121,8 @@ export class SchedulingService {
     }
 
     // Conflict detection
-    const conflicts = this.detectConflicts(formData);
-    conflicts.forEach(conflict => {
+    const conflictResult = this.detectConflicts(formData);
+    conflictResult.conflicts.forEach((conflict: PaymentConflict) => {
       if (conflict.severity === 'high') {
         errors.push({ field: 'conflict', message: conflict.message });
       } else {
@@ -134,21 +139,21 @@ export class SchedulingService {
 
   detectConflicts(formData: ScheduleFormData, excludeScheduleId?: string): ConflictDetectionResult {
     const conflicts: PaymentConflict[] = [];
-    
+
     try {
       const data = localStorage.getItem(this.storageKey);
       const existingSchedules: PaymentSchedule[] = data ? JSON.parse(data) : [];
-      
+
       // Filter out the schedule being edited (if any)
-      const relevantSchedules = existingSchedules.filter(s => 
-        s.id !== excludeScheduleId && 
-        s.status !== PaymentStatus.CANCELLED && 
+      const relevantSchedules = existingSchedules.filter(s =>
+        s.id !== excludeScheduleId &&
+        s.status !== PaymentStatus.CANCELLED &&
         s.status !== PaymentStatus.COMPLETED
       );
 
       // Check for same meter conflicts
       const sameMeterSchedules = relevantSchedules.filter(s => s.meterId === formData.meterId);
-      
+
       if (sameMeterSchedules.length > 0) {
         sameMeterSchedules.forEach(existingSchedule => {
           const conflict = this.analyzeMeterConflict(formData, existingSchedule);
@@ -173,15 +178,15 @@ export class SchedulingService {
     const newAmount = parseFloat(newSchedule.amount);
     const newStartDate = new Date(newSchedule.startDate);
     const newEndDate = newSchedule.endDate ? new Date(newSchedule.endDate) : null;
-    
+
     const existingStartDate = new Date(existingSchedule.startDate);
     const existingEndDate = existingSchedule.endDate ? new Date(existingSchedule.endDate) : null;
 
     // Check for exact duplicate
     if (Math.abs(newAmount - existingSchedule.amount) < 0.01 &&
-        newSchedule.frequency === existingSchedule.frequency &&
-        newStartDate.toDateString() === existingStartDate.toDateString()) {
-      
+      newSchedule.frequency === existingSchedule.frequency &&
+      newStartDate.toDateString() === existingStartDate.toDateString()) {
+
       return {
         id: `conflict_${Date.now()}`,
         type: 'duplicate_schedule',
@@ -206,7 +211,7 @@ export class SchedulingService {
 
     if (hasDateOverlap) {
       const severity = newAmount === existingSchedule.amount ? 'medium' : 'low';
-      
+
       return {
         id: `conflict_${Date.now()}`,
         type: 'overlapping_payment',

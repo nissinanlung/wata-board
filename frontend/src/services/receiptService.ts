@@ -1,6 +1,7 @@
 import html2pdf from 'html2pdf.js';
 import QRCode from 'qrcode';
-import { Receipt, ReceiptData, ReceiptGenerationOptions } from '../types/receipt';
+import type { FrontendReceipt as Receipt, FrontendReceiptData as ReceiptData, ReceiptGenerationOptions } from '../types/receipt';
+import { toISOString, fromDateISOString } from '../../../shared/types';
 
 /**
  * Service for generating, storing, and retrieving payment receipts
@@ -79,7 +80,6 @@ export class ReceiptService {
       return await QRCode.toDataURL(qrText, {
         errorCorrectionLevel: 'H',
         type: 'image/png',
-        quality: 0.92,
         margin: 1,
         width: 200,
         color: {
@@ -105,9 +105,9 @@ export class ReceiptService {
       const options = {
         margin: 10,
         filename: `receipt-${receipt.receiptNumber}.pdf`,
-        image: { type: 'png', quality: 0.98 },
+        image: { type: 'png' as const, quality: 0.98 },
         html2canvas: { scale: 2 },
-        jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
+        jsPDF: { orientation: 'portrait' as const, unit: 'mm', format: 'a4' }
       };
 
       html2pdf().set(options).from(el).toPdf().get('pdf').then((pdf: any) => {
@@ -138,7 +138,7 @@ export class ReceiptService {
             .value { font-weight: 500; color: #333; }
             .amount-section { background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
             .amount-label { font-size: 12px; color: #666; }
-            .amount-value { font-size: 32px; font-weight: bold; color: ${receipt.status === 'completed' ? '#10b981' : '#666'}; }
+            .amount-value { font-size: 32px; font-weight: bold; color: ${receipt.status === 'generated' || receipt.status === 'viewed' ? '#10b981' : '#666'}; }
             .status-badge { display: inline-block; padding: 5px 12px; border-radius: 20px; font-size: 11px; font-weight: bold; text-transform: uppercase; margin-top: 10px; }
             .status-completed { background-color: #d1fae5; color: #065f46; }
             .status-pending { background-color: #fef3c7; color: #92400e; }
@@ -312,10 +312,10 @@ export class ReceiptService {
       if (stored) {
         const receipts = JSON.parse(stored) as Receipt[];
         receipts.forEach(r => {
-          r.date = new Date(r.date);
+          r.date = fromDateISOString(r.date as unknown as string);
           if (r.billPeriod) {
-            r.billPeriod.start = new Date(r.billPeriod.start);
-            r.billPeriod.end = new Date(r.billPeriod.end);
+            r.billPeriod.start = fromDateISOString(r.billPeriod.start as unknown as string);
+            r.billPeriod.end = fromDateISOString(r.billPeriod.end as unknown as string);
           }
           this.receipts.set(r.id, r);
         });
@@ -346,7 +346,7 @@ export class ReceiptService {
       r.meterId,
       r.amount,
       r.currency,
-      r.date.toISOString(),
+      toISOString(r.date),
       r.status,
       r.transactionHash || ''
     ]);
