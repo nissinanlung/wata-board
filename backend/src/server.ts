@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import https from 'https';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
+import { Request, Response, NextFunction } from 'express';
 import { PaymentService, PaymentRequest } from './payment-service';
 import { RateLimitConfig } from './rate-limiter';
 import logger from './utils/logger';
@@ -111,8 +113,29 @@ app.use(cors(corsOptions));
 app.use(requestContextMiddleware);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use((req, res, next) => {
-  logger.info('Incoming HTTP Request', { method: req.method, path: req.path, ip: req.ip, userAgent: req.get('user-agent') });
+
+// Request ID middleware — generates or propagates a unique ID for every request,
+// attaches it to req.requestId, and sets the X-Request-ID response header.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const incoming = req.headers['x-request-id'];
+  // Propagate if the caller supplied a valid UUID-shaped header; otherwise generate.
+  const requestId =
+    typeof incoming === 'string' && /^[\w\-]{8,64}$/.test(incoming)
+      ? incoming
+      : randomUUID();
+  (req as any).requestId = requestId;
+  res.setHeader('X-Request-ID', requestId);
+  next();
+});
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  logger.info('Incoming HTTP Request', {
+    method: req.method,
+    path: req.path,
+    ip: req.ip,
+    userAgent: req.get('user-agent'),
+    requestId: (req as any).requestId,
+  });
   next();
 });
 
@@ -204,9 +227,9 @@ app.post('/api/v1/payment', async (req, res) => {
       return res.status(400).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
     }
   } catch (error) {
-    logger.error('Payment processing exception', { error, body: req.body });
-    void captureException(error, { source: 'payment-route', body: req.body });
-    return res.status(500).json({ success: false, error: 'Internal server error' });
+    logger.error('Payment processing exception', { error, body: req.body, requestId: (req as any).requestId });
+    void captureException(error, { source: 'payment-route', body: req.body, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Internal server error', requestId: (req as any).requestId });
   }
 });
 
@@ -236,9 +259,9 @@ app.post('/api/v2/payment', async (req, res) => {
       return res.status(400).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
     }
   } catch (error) {
-    logger.error('Payment processing exception', { error, body: req.body });
-    void captureException(error, { source: 'payment-route', body: req.body });
-    return res.status(500).json({ success: false, error: 'Internal server error' });
+    logger.error('Payment processing exception', { error, body: req.body, requestId: (req as any).requestId });
+    void captureException(error, { source: 'payment-route', body: req.body, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Internal server error', requestId: (req as any).requestId });
   }
 });
 
@@ -269,9 +292,9 @@ app.post('/api/payment', async (req, res) => {
       return res.status(400).json({ success: false, error: (result as any).error, rateLimitInfo: result.rateLimitInfo });
     }
   } catch (error) {
-    logger.error('Payment processing exception', { error, body: req.body });
-    void captureException(error, { source: 'payment-route', body: req.body });
-    return res.status(500).json({ success: false, error: 'Internal server error' });
+    logger.error('Payment processing exception', { error, body: req.body, requestId: (req as any).requestId });
+    void captureException(error, { source: 'payment-route', body: req.body, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Internal server error', requestId: (req as any).requestId });
   }
 });
 
@@ -834,7 +857,9 @@ app.get('/api/payment/:meterId', async (req, res) => {
 });
 
 app.use(StandardErrorHandler.handle());
-app.use('*', (_req, res) => { res.status(404).json({ success: false, error: 'Endpoint not found' }); });
+app.use('*', (req: Request, res: Response) => {
+  res.status(404).json({ success: false, error: 'Endpoint not found', requestId: (req as any).requestId });
+});
 
 function getAllowedOrigins(): string[] {
   const origins = [...config.cors.allowedOrigins];
