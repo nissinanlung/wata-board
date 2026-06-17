@@ -29,7 +29,7 @@ import { captureAndTrackConfig } from './utils/configSnapshot';
 import { captureException } from './utils/errorTracker';
 import { envConfig } from './utils/env';
 import { config } from './config/appConfig';
-import { sanitizeString, sanitizeAlphanumeric, sanitizePositiveNumber, validationError, type ValidationError } from './utils/sanitize';
+import { sanitizeString, sanitizeAlphanumeric, sanitizePositiveNumber, sanitizeMeterId, validationError, type ValidationError } from './utils/sanitize';
 import { versioningMiddleware } from './middleware/versioning';
 import realTimeMonitoringRoutes from './routes/realTimeMonitoring';
 import { database } from './utils/database';
@@ -182,8 +182,8 @@ app.post('/api/v1/payment', async (req, res) => {
   try {
     const raw = req.body;
     const errors: ValidationError[] = [];
-    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
-    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const meter_id = sanitizeMeterId(raw.meter_id);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
     const amount = sanitizePositiveNumber(raw.amount);
     if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
     const userId = sanitizeAlphanumeric(raw.userId, 100);
@@ -214,8 +214,8 @@ app.post('/api/v2/payment', async (req, res) => {
   try {
     const raw = req.body;
     const errors: ValidationError[] = [];
-    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
-    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const meter_id = sanitizeMeterId(raw.meter_id);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
     const amount = sanitizePositiveNumber(raw.amount);
     if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
     const userId = sanitizeAlphanumeric(raw.userId, 100);
@@ -247,8 +247,8 @@ app.post('/api/payment', async (req, res) => {
   try {
     const raw = req.body;
     const errors: ValidationError[] = [];
-    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
-    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const meter_id = sanitizeMeterId(raw.meter_id);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
     const amount = sanitizePositiveNumber(raw.amount);
     if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
     const userId = sanitizeAlphanumeric(raw.userId, 100);
@@ -277,16 +277,19 @@ app.post('/api/payment', async (req, res) => {
 
 app.post('/api/v1/payment/multi-provider', async (req, res) => {
   try {
-    const { meter_id, amount, userId, providerId } = req.body;
-    if (!meter_id || !amount || !userId || !providerId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
-    }
-    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
-      return res.status(400).json({ success: false, error: 'Invalid field types' });
-    }
-    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeMeterId(raw.meter_id);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    const providerId = sanitizeAlphanumeric(raw.providerId, 50);
+    if (!providerId) errors.push(validationError('providerId', 'providerId must be an alphanumeric string (max 50 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
-    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const paymentRequest: ProviderPaymentRequest = { meter_id, amount, userId, providerId };
     const result = await multiProviderPaymentService.processPayment(paymentRequest);
     res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
 
@@ -307,16 +310,19 @@ app.post('/api/v1/payment/multi-provider', async (req, res) => {
 
 app.post('/api/v2/payment/multi-provider', async (req, res) => {
   try {
-    const { meter_id, amount, userId, providerId } = req.body;
-    if (!meter_id || !amount || !userId || !providerId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
-    }
-    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
-      return res.status(400).json({ success: false, error: 'Invalid field types' });
-    }
-    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeMeterId(raw.meter_id);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    const providerId = sanitizeAlphanumeric(raw.providerId, 50);
+    if (!providerId) errors.push(validationError('providerId', 'providerId must be an alphanumeric string (max 50 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
-    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const paymentRequest: ProviderPaymentRequest = { meter_id, amount, userId, providerId };
     const result = await multiProviderPaymentService.processPayment(paymentRequest);
     res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
 
@@ -338,16 +344,19 @@ app.post('/api/v2/payment/multi-provider', async (req, res) => {
 // Legacy multi-provider route (backward compatibility)
 app.post('/api/payment/multi-provider', async (req, res) => {
   try {
-    const { meter_id, amount, userId, providerId } = req.body;
-    if (!meter_id || !amount || !userId || !providerId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
-    }
-    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
-      return res.status(400).json({ success: false, error: 'Invalid field types' });
-    }
-    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeMeterId(raw.meter_id);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    const providerId = sanitizeAlphanumeric(raw.providerId, 50);
+    if (!providerId) errors.push(validationError('providerId', 'providerId must be an alphanumeric string (max 50 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
-    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const paymentRequest: ProviderPaymentRequest = { meter_id, amount, userId, providerId };
     const result = await multiProviderPaymentService.processPayment(paymentRequest);
     res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
 
@@ -651,8 +660,8 @@ app.delete('/api/user/delete-data/:userId', async (req, res) => {
 
 app.get('/api/v1/payment/:meterId', async (req, res) => {
   try {
-    const meterId = sanitizeAlphanumeric(req.params.meterId, 50);
-    if (!meterId) return res.status(400).json({ success: false, error: 'Invalid Meter ID format' });
+    const meterId = sanitizeMeterId(req.params.meterId);
+    if (!meterId) return res.status(400).json({ success: false, error: 'meterId must be 3-50 alphanumeric characters (hyphens and underscores allowed)' });
     logger.warn('Contract client not available - returning mock data', { meterId });
     return res.status(200).json({ success: true, data: { meterId, totalPaid: 0, network: envConfig.NETWORK || 'testnet' } });
   } catch (error) {
@@ -663,8 +672,8 @@ app.get('/api/v1/payment/:meterId', async (req, res) => {
 
 app.get('/api/v2/payment/:meterId', async (req, res) => {
   try {
-    const meterId = sanitizeAlphanumeric(req.params.meterId, 50);
-    if (!meterId) return res.status(400).json({ success: false, error: 'Invalid Meter ID format' });
+    const meterId = sanitizeMeterId(req.params.meterId);
+    if (!meterId) return res.status(400).json({ success: false, error: 'meterId must be 3-50 alphanumeric characters (hyphens and underscores allowed)' });
     logger.warn('Contract client not available - returning mock data', { meterId });
     return res.status(200).json({ success: true, data: { meterId, totalPaid: 0, network: envConfig.NETWORK || 'testnet' } });
   } catch (error) {
@@ -823,8 +832,8 @@ app.get('/api/payment/history', async (req, res) => {
 
 app.get('/api/payment/:meterId', async (req, res) => {
   try {
-    const meterId = sanitizeAlphanumeric(req.params.meterId, 50);
-    if (!meterId) return res.status(400).json({ success: false, error: 'Invalid Meter ID format' });
+    const meterId = sanitizeMeterId(req.params.meterId);
+    if (!meterId) return res.status(400).json({ success: false, error: 'meterId must be 3-50 alphanumeric characters (hyphens and underscores allowed)' });
     logger.warn('Contract client not available - returning mock data', { meterId });
     return res.status(200).json({ success: true, data: { meterId, totalPaid: 0, network: envConfig.NETWORK || 'testnet' } });
   } catch (error) {

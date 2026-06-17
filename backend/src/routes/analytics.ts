@@ -3,7 +3,9 @@ import { AnalyticsService } from "../services/analyticsService";
 import logger from "../utils/logger";
 import {
   sanitizeAlphanumeric,
+  sanitizeMeterId,
   sanitizeString,
+  sanitizePositiveNumber,
   validationError,
   type ValidationError,
 } from "../utils/sanitize";
@@ -132,11 +134,11 @@ router.get("/predictive/:userId", async (req, res) => {
  */
 router.get("/meter/:meterId", async (req, res) => {
   try {
-    const meterId = sanitizeAlphanumeric(req.params.meterId, 50);
+    const meterId = sanitizeMeterId(req.params.meterId);
     if (!meterId) {
       return res.status(400).json({
         success: false,
-        error: "Invalid Meter ID format",
+        error: "meterId must be 3-50 alphanumeric characters (hyphens and underscores allowed)",
       });
     }
 
