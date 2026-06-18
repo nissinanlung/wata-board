@@ -14,7 +14,7 @@ export interface PaymentRequest {
   amount: number;
   userId: string;
   memo?: string;
-  nonce: string; // Unique nonce to prevent replay attacks
+  nonce?: string;
 }
 
 // Updated interface using standardized types
@@ -32,17 +32,19 @@ function convertToStandardRequest(legacyRequest: PaymentRequest): SharedPaymentR
     amount: legacyRequest.amount,
     userId: legacyRequest.userId,
     timestamp: new Date().toISOString(),
-    nonce: legacyRequest.nonce
+    nonce: legacyRequest.nonce ?? `${legacyRequest.userId}-${Date.now()}`
   };
 }
 
 export class PaymentService {
   private rateLimiter: RateLimiter;
+  private rateLimitConfig: RateLimitConfig;
   private pendingPayments: Map<string, PaymentRequest> = new Map();
   private readonly maxRetryAttempts = 4;
   private emailService?: EmailNotificationService;
 
   constructor(rateLimitConfig: RateLimitConfig, emailService?: EmailNotificationService) {
+    this.rateLimitConfig = rateLimitConfig;
     this.rateLimiter = new RateLimiter(rateLimitConfig);
     this.emailService = emailService;
   }
@@ -51,6 +53,15 @@ export class PaymentService {
    * Process payment with rate limiting
    */
   async processPayment(request: PaymentRequest): Promise<PaymentResult> {
+    const validationError = this.validatePaymentRequest(request);
+    if (validationError) {
+      return {
+        success: false,
+        error: validationError,
+        timestamp: new Date().toISOString(),
+      };
+    }
+
     const paymentId = this.generatePaymentId();
 
     try {
@@ -310,13 +321,39 @@ export class PaymentService {
   }
 
   /**
+   * Validate payment request fields before processing.
+   */
+  private validatePaymentRequest(request: PaymentRequest): string | null {
+    const meterIdPattern = /^[A-Za-z0-9_-]{1,50}$/;
+    const userIdPattern = /^[A-Za-z0-9_-]{1,100}$/;
+
+    if (!request.meter_id || !meterIdPattern.test(request.meter_id.trim())) {
+      return 'Invalid meter ID: must be a non-empty alphanumeric string';
+    }
+
+    if (!request.userId || !userIdPattern.test(String(request.userId).trim())) {
+      return 'Invalid user ID: must be a non-empty alphanumeric string';
+    }
+
+    if (
+      typeof request.amount !== 'number' ||
+      !Number.isFinite(request.amount) ||
+      request.amount <= 0
+    ) {
+      return 'Invalid amount: must be a positive number';
+    }
+
+    return null;
+  }
+
+  /**
    * Execute the actual payment transaction
    */
   private async executePayment(request: PaymentRequest): Promise<string> {
     const { updateTransactionStatus } = await import('./services/websocketService');
     
     // Import the client dynamically to avoid circular dependencies
-    const NepaClient = await import('../../../contract/nepa_client_v2' as any);
+    const NepaClient = await import('../packages/nepa_client_v2' as any);
 
     const client = new NepaClient.Client({
       ...NepaClient.networks.testnet,
@@ -327,7 +364,7 @@ export class PaymentService {
       meter_id: request.meter_id,
       amount: request.amount,
       memo: request.memo,
-      nonce: request.nonce
+      nonce: request.nonce ?? `${request.userId}-${Date.now()}`
     });
 
     const transactionId = tx.hash || 'tx_' + Date.now();
@@ -339,7 +376,12 @@ export class PaymentService {
     // For backend processing, we'd need to sign with the admin key
     // Using secure key management
     const { secureEnvConfig } = await import('./utils/secureEnvConfig');
-    const adminSecret = secureEnvConfig.getAdminSecretKey();
+    let adminSecret: string;
+    try {
+      adminSecret = secureEnvConfig.getAdminSecretKey();
+    } catch {
+      throw new Error('Admin secret key not configured');
+    }
 
     const { Keypair } = await import('@stellar/stellar-sdk');
     const adminKeypair = Keypair.fromSecret(adminSecret);
@@ -454,6 +496,17 @@ export class PaymentService {
    */
   private generatePaymentId(): string {
     return 'pay_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+  }
+
+  /**
+   * Reset rate-limit state for one user or all users (used in tests and admin tooling).
+   */
+  resetRateLimits(userId?: string): void {
+    if (userId) {
+      this.rateLimiter.resetUser(userId);
+      return;
+    }
+    this.rateLimiter = new RateLimiter(this.rateLimitConfig);
   }
 
   /**
