@@ -29,7 +29,7 @@ import { captureAndTrackConfig } from './utils/configSnapshot';
 import { captureException } from './utils/errorTracker';
 import { envConfig } from './utils/env';
 import { config } from './config/appConfig';
-import { sanitizeString, sanitizeAlphanumeric, sanitizePositiveNumber, validationError, type ValidationError } from './utils/sanitize';
+import { sanitizeString, sanitizeAlphanumeric, sanitizePositiveNumber, sanitizeInteger, sanitizeDescription, validationError, type ValidationError } from './utils/sanitize';
 import { versioningMiddleware } from './middleware/versioning';
 import realTimeMonitoringRoutes from './routes/realTimeMonitoring';
 import { database } from './utils/database';
@@ -676,107 +676,183 @@ app.get('/api/v2/payment/:meterId', async (req, res) => {
 // Legacy payment get route (backward compatibility)
 app.get('/api/payment/history', async (req, res) => {
   try {
-    const rawPage = Number(req.query.page ?? '1');
-    const rawLimit = Number(req.query.limit ?? '20');
+    const validationErrors: ValidationError[] = [];
 
-    const page = Number.isFinite(rawPage) && rawPage > 0 ? Math.floor(rawPage) : 1;
-    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 100) : 20;
+    // ── Pagination ──────────────────────────────────────────────────────────
+    const rawPage  = sanitizeInteger(req.query.page  ?? '1',  1, 10_000);
+    const rawLimit = sanitizeInteger(req.query.limit ?? '20', 1, 100);
+
+    if (req.query.page  !== undefined && Number.isNaN(rawPage))  validationErrors.push(validationError('page',  'page must be a positive integer (1–10000)'));
+    if (req.query.limit !== undefined && Number.isNaN(rawLimit)) validationErrors.push(validationError('limit', 'limit must be an integer between 1 and 100'));
+
+    const page   = Number.isNaN(rawPage)  ? 1  : rawPage;
+    const limit  = Number.isNaN(rawLimit) ? 20 : rawLimit;
     const offset = (page - 1) * limit;
 
+    // ── String filters ──────────────────────────────────────────────────────
     const userId = req.query.userId ? sanitizeAlphanumeric(String(req.query.userId), 100) : '';
-    const meterId = req.query.meterId ? sanitizeAlphanumeric(String(req.query.meterId), 50) : '';
-    const status = req.query.status ? sanitizeString(String(req.query.status), 20).toLowerCase() : '';
-    const search = req.query.search ? sanitizeString(String(req.query.search), 200).toLowerCase() : '';
-    const startDate = req.query.startDate ? sanitizeString(String(req.query.startDate), 32) : '';
-    const endDate = req.query.endDate ? sanitizeString(String(req.query.endDate), 32) : '';
-    const minAmount = req.query.minAmount ? sanitizePositiveNumber(req.query.minAmount) : NaN;
-    const maxAmount = req.query.maxAmount ? sanitizePositiveNumber(req.query.maxAmount) : NaN;
-    const sortBy = req.query.sortBy ? sanitizeString(String(req.query.sortBy), 20) : 'date-desc';
+    if (req.query.userId  !== undefined && !userId)  validationErrors.push(validationError('userId',  'userId must be alphanumeric (max 100 chars)'));
 
+    const meterId = req.query.meterId ? sanitizeAlphanumeric(String(req.query.meterId), 50) : '';
+    if (req.query.meterId !== undefined && !meterId) validationErrors.push(validationError('meterId', 'meterId must be alphanumeric (max 50 chars)'));
+
+    // status must be one of the known enum values
+    const ALLOWED_STATUSES = new Set(['pending', 'scheduled', 'processing', 'completed', 'failed', 'cancelled', 'paused']);
+    const rawStatus = req.query.status ? sanitizeString(String(req.query.status), 20).toLowerCase() : '';
+    if (rawStatus && !ALLOWED_STATUSES.has(rawStatus)) {
+      validationErrors.push(validationError('status', `status must be one of: ${[...ALLOWED_STATUSES].join(', ')}`));
+    }
+    const status = ALLOWED_STATUSES.has(rawStatus) ? rawStatus : '';
+
+    // search — strip control chars, keep reasonable length
+    const search = req.query.search ? sanitizeDescription(String(req.query.search), 200).toLowerCase() : '';
+
+    // sortBy must be one of the known values
+    const ALLOWED_SORT = new Set(['date-desc', 'date-asc', 'amount-asc', 'amount-desc']);
+    const rawSortBy = req.query.sortBy ? sanitizeString(String(req.query.sortBy), 20) : 'date-desc';
+    if (req.query.sortBy !== undefined && !ALLOWED_SORT.has(rawSortBy)) {
+      validationErrors.push(validationError('sortBy', `sortBy must be one of: ${[...ALLOWED_SORT].join(', ')}`));
+    }
+    const sortBy = ALLOWED_SORT.has(rawSortBy) ? rawSortBy : 'date-desc';
+
+    // ── Numeric range filters ───────────────────────────────────────────────
+    const minAmount = req.query.minAmount !== undefined ? sanitizePositiveNumber(req.query.minAmount) : NaN;
+    const maxAmount = req.query.maxAmount !== undefined ? sanitizePositiveNumber(req.query.maxAmount) : NaN;
+
+    if (req.query.minAmount !== undefined && Number.isNaN(minAmount)) validationErrors.push(validationError('minAmount', 'minAmount must be a positive number'));
+    if (req.query.maxAmount !== undefined && Number.isNaN(maxAmount)) validationErrors.push(validationError('maxAmount', 'maxAmount must be a positive number'));
+    if (!Number.isNaN(minAmount) && !Number.isNaN(maxAmount) && minAmount > maxAmount) {
+      validationErrors.push(validationError('minAmount', 'minAmount must be less than or equal to maxAmount'));
+    }
+
+    // ── Date filters — strict ISO 8601 (YYYY-MM-DD or full timestamp) ───────
+    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
+    let startDateObj: Date | null = null;
+    if (req.query.startDate !== undefined) {
+      const raw = sanitizeString(String(req.query.startDate), 32);
+      if (!ISO_DATE_RE.test(raw)) {
+        validationErrors.push(validationError('startDate', 'startDate must be a valid ISO 8601 date (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ)'));
+      } else {
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) {
+          validationErrors.push(validationError('startDate', 'startDate is not a valid calendar date'));
+        } else {
+          startDateObj = d;
+        }
+      }
+    }
+
+    let endDateObj: Date | null = null;
+    if (req.query.endDate !== undefined) {
+      const raw = sanitizeString(String(req.query.endDate), 32);
+      if (!ISO_DATE_RE.test(raw)) {
+        validationErrors.push(validationError('endDate', 'endDate must be a valid ISO 8601 date (YYYY-MM-DD or YYYY-MM-DDTHH:mm:ssZ)'));
+      } else {
+        const d = new Date(raw);
+        if (Number.isNaN(d.getTime())) {
+          validationErrors.push(validationError('endDate', 'endDate is not a valid calendar date'));
+        } else {
+          endDateObj = d;
+        }
+      }
+    }
+
+    if (startDateObj && endDateObj && startDateObj > endDateObj) {
+      validationErrors.push(validationError('startDate', 'startDate must be before or equal to endDate'));
+    }
+
+    // ── Return early if any parameter is invalid ────────────────────────────
+    if (validationErrors.length > 0) {
+      return res.status(400).json({ success: false, errors: validationErrors });
+    }
+
+    // ── Build parameterised WHERE clause ────────────────────────────────────
+    // All user-supplied values are bound via $N params — never interpolated.
     const whereParts: string[] = ['1=1'];
     const params: Array<string | number | Date> = [];
     let paramIndex = 1;
 
     if (userId) {
-      whereParts.push(`user_id::text = $${paramIndex}`);
+      whereParts.push('user_id::text = $' + paramIndex);
       params.push(userId);
       paramIndex += 1;
     }
     if (meterId) {
-      whereParts.push(`meter_id ILIKE $${paramIndex}`);
-      params.push(`%${meterId}%`);
+      whereParts.push('meter_id ILIKE $' + paramIndex);
+      params.push('%' + meterId + '%');
       paramIndex += 1;
     }
     if (status) {
-      whereParts.push(`status::text = $${paramIndex}`);
+      whereParts.push('status::text = $' + paramIndex);
       params.push(status);
       paramIndex += 1;
     }
     if (search) {
-      whereParts.push(`(transaction_hash ILIKE $${paramIndex} OR meter_id ILIKE $${paramIndex} OR id::text ILIKE $${paramIndex})`);
-      params.push(`%${search}%`);
-      paramIndex += 1;
+      // Each ILIKE clause needs its own parameter slot
+      whereParts.push(
+        '(transaction_hash ILIKE $' + paramIndex +
+        ' OR meter_id ILIKE $' + (paramIndex + 1) +
+        ' OR id::text ILIKE $' + (paramIndex + 2) + ')'
+      );
+      const pattern = '%' + search + '%';
+      params.push(pattern, pattern, pattern);
+      paramIndex += 3;
     }
     if (!Number.isNaN(minAmount)) {
-      whereParts.push(`amount >= $${paramIndex}`);
+      whereParts.push('amount >= $' + paramIndex);
       params.push(minAmount);
       paramIndex += 1;
     }
     if (!Number.isNaN(maxAmount)) {
-      whereParts.push(`amount <= $${paramIndex}`);
+      whereParts.push('amount <= $' + paramIndex);
       params.push(maxAmount);
       paramIndex += 1;
     }
-    if (startDate) {
-      const start = new Date(startDate);
-      if (!Number.isNaN(start.getTime())) {
-        whereParts.push(`created_at >= $${paramIndex}`);
-        params.push(start);
-        paramIndex += 1;
-      }
+    if (startDateObj) {
+      whereParts.push('created_at >= $' + paramIndex);
+      params.push(startDateObj);
+      paramIndex += 1;
     }
-    if (endDate) {
-      const end = new Date(endDate);
-      if (!Number.isNaN(end.getTime())) {
-        whereParts.push(`created_at <= $${paramIndex}`);
-        params.push(end);
-        paramIndex += 1;
-      }
+    if (endDateObj) {
+      whereParts.push('created_at <= $' + paramIndex);
+      params.push(endDateObj);
+      paramIndex += 1;
     }
 
     const whereClause = whereParts.join(' AND ');
     const orderClause =
-      sortBy === 'date-asc' ? 'created_at ASC' :
-      sortBy === 'amount-asc' ? 'amount ASC' :
-      sortBy === 'amount-desc' ? 'amount DESC' :
+      sortBy === 'date-asc'    ? 'created_at ASC'  :
+      sortBy === 'amount-asc'  ? 'amount ASC'       :
+      sortBy === 'amount-desc' ? 'amount DESC'      :
       'created_at DESC';
 
     const countResult = await database.query(
-      `SELECT COUNT(*)::int AS total_records FROM payments WHERE ${whereClause}`,
+      'SELECT COUNT(*)::int AS total_records FROM payments WHERE ' + whereClause,
       params
     );
     const totalRecords = Number(countResult.rows?.[0]?.total_records ?? 0);
 
     const recordsResult = await database.query(
-      `SELECT
-         id::text AS id,
-         meter_id AS "meterId",
-         amount::numeric AS amount,
-         CASE
-           WHEN status::text = 'confirmed' THEN 'completed'
-           WHEN status::text = 'queued' THEN 'scheduled'
-           ELSE status::text
-         END AS status,
-         created_at AS "scheduledDate",
-         confirmed_at AS "actualPaymentDate",
-         transaction_hash AS "transactionId",
-         metadata->>'errorMessage' AS "errorMessage",
-         COALESCE((metadata->>'retryCount')::int, 0) AS "retryCount",
-         created_at AS "createdAt"
-       FROM payments
-       WHERE ${whereClause}
-       ORDER BY ${orderClause}
-       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+      'SELECT' +
+      '  id::text AS id,' +
+      '  meter_id AS "meterId",' +
+      '  amount::numeric AS amount,' +
+      '  CASE' +
+      '    WHEN status::text = \'confirmed\' THEN \'completed\'' +
+      '    WHEN status::text = \'queued\'    THEN \'scheduled\'' +
+      '    ELSE status::text' +
+      '  END AS status,' +
+      '  created_at AS "scheduledDate",' +
+      '  confirmed_at AS "actualPaymentDate",' +
+      '  transaction_hash AS "transactionId",' +
+      '  metadata->>\'errorMessage\' AS "errorMessage",' +
+      '  COALESCE((metadata->>\'retryCount\')::int, 0) AS "retryCount",' +
+      '  created_at AS "createdAt"' +
+      ' FROM payments' +
+      ' WHERE ' + whereClause +
+      ' ORDER BY ' + orderClause +
+      ' LIMIT $' + paramIndex + ' OFFSET $' + (paramIndex + 1),
       [...params, limit, offset]
     );
 
@@ -816,8 +892,8 @@ app.get('/api/payment/history', async (req, res) => {
       }
     });
   } catch (error) {
-    logger.error('Payment history query failed', { error, query: req.query });
-    return res.status(500).json({ success: false, error: 'Failed to retrieve payment history' });
+    logger.error('Payment history query failed', { error, query: req.query, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve payment history', requestId: (req as any).requestId });
   }
 });
 
