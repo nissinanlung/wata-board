@@ -209,6 +209,45 @@ describe('OWASP Security Tests', () => {
         .send({ meter_id: { $ne: null }, amount: 50 })
         .expect(400);
     });
+
+    it('should reject meter IDs with SQL injection payloads', async () => {
+      const sqlInjectionPayloads = [
+        "'; DROP TABLE payments; --",
+        "METER-001'; DELETE FROM users; --",
+        "' OR '1'='1",
+        "'; EXEC xp_cmdshell('dir'); --",
+        "1; SELECT * FROM admin",
+      ];
+
+      for (const payload of sqlInjectionPayloads) {
+        const response = await request(app)
+          .post('/api/pay')
+          .set('Authorization', 'Bearer admin-token')
+          .send({ meter_id: payload, amount: 50 })
+          .expect(400);
+
+        expect(response.body).toHaveProperty('error');
+      }
+    });
+
+    it('should reject meter IDs with script injection payloads', async () => {
+      const xssPayloads = [
+        '<script>alert("XSS")</script>',
+        'METER-001<img src=x onerror=alert(1)>',
+        'javascript:alert(document.cookie)',
+        '"><script>fetch("/api/keys")</script>',
+      ];
+
+      for (const payload of xssPayloads) {
+        const response = await request(app)
+          .post('/api/pay')
+          .set('Authorization', 'Bearer admin-token')
+          .send({ meter_id: payload, amount: 50 })
+          .expect(400);
+
+        expect(response.body).toHaveProperty('error');
+      }
+    });
   });
 
   describe('A04: Insecure Design', () => {

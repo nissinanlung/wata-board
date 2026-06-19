@@ -4,6 +4,11 @@
 .env.production
 .env.development
 
+# Logs — never commit log files or rotated archives
+logs/
+*.log
+*.log.gz
+
 # Dependencies
 node_modules/
 npm-debug.log*
@@ -24,3 +29,8 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local issue tracking files
+issue.mdcontract/target/
+backend/node_modules/
+frontend/node_modules/

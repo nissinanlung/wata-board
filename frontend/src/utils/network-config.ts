@@ -1,42 +1,16 @@
-export type NetworkType = 'testnet' | 'mainnet';
-
-export interface NetworkConfig {
-  networkPassphrase: string;
-  contractId: string;
-  rpcUrl: string;
-  explorerUrl: string;
-}
-
-export const NETWORKS: Record<NetworkType, NetworkConfig> = {
-  testnet: {
-    networkPassphrase: "Test SDF Network ; September 2015",
-    contractId: "CDRRJ7IPYDL36YSK5ZQLBG3LICULETIBXX327AGJQNTWXNKY2UMDO4DA",
-    rpcUrl: "https://soroban-testnet.stellar.org",
-    explorerUrl: "https://stellar.expert/explorer/testnet/tx/",
-  },
-  mainnet: {
-    networkPassphrase: "Public Global Stellar Network ; September 2015",
-    contractId: "MAINNET_CONTRACT_ID_HERE", // Replace with actual mainnet contract ID
-    rpcUrl: "https://soroban.stellar.org",
-    explorerUrl: "https://stellar.expert/explorer/public/tx/",
-  },
-};
-
-export function getNetworkConfig(network: NetworkType): NetworkConfig {
-  return NETWORKS[network];
-}
-
-export function getNetworkFromEnv(): NetworkType {
-  // For frontend (Vite): import.meta.env.VITE_NETWORK
+/**
+ * Frontend Network Configuration - Re-export from shared types for consistency
+ */
+export type { NetworkType, NetworkConfig } from '../../../shared/types';
+export {
+  NETWORKS,
+  getNetworkConfig,
+  getCurrentNetworkConfig,
+  isValidNetwork
+} from '../../../shared/types';
+// Frontend-specific override for getNetworkFromEnv
+import type { NetworkType as SharedNetworkType } from '../../../shared/types';
+export function getNetworkFromEnv(): SharedNetworkType {
   const network = import.meta.env.VITE_NETWORK;
   return network === 'mainnet' ? 'mainnet' : 'testnet';
-}
-
-export function getCurrentNetworkConfig(): NetworkConfig {
-  const network = getNetworkFromEnv();
-  return getNetworkConfig(network);
-}
-
-export function isValidNetwork(network: string): network is NetworkType {
-  return network === 'testnet' || network === 'mainnet';
 }

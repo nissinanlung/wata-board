@@ -1,37 +1,31 @@
 // Fixed path: added ../ to go up one level from 'src' to find 'packages'
 import * as NepaClient from '../packages/nepa_client_v2';
 import { Keypair } from '@stellar/stellar-sdk';
-import dotenv from 'dotenv';
+import { envConfig } from './utils/env';
 import { getCurrentNetworkConfig } from './utils/network-config';
-
-// Load environment variables
-dotenv.config();
 
 async function main() {
     // Get current network configuration
     const networkConfig = getCurrentNetworkConfig();
-    
+
     const client = new NepaClient.Client({
         networkPassphrase: networkConfig.networkPassphrase,
         contractId: networkConfig.contractId,
         rpcUrl: networkConfig.rpcUrl,
     });
 
-    // Get admin secret key from environment variables
-    const adminSecret = process.env.ADMIN_SECRET_KEY;
-    
-    if (!adminSecret) {
-        throw new Error('ADMIN_SECRET_KEY environment variable is not set');
-    }
-    
+    // Get admin secret key using secure key management
+    const { secureEnvConfig } = await import('./utils/secureEnvConfig');
+    const adminSecret = secureEnvConfig.getAdminSecretKey();
+
     const adminKeypair = Keypair.fromSecret(adminSecret);
 
-    const meterId = "METER-001";
+    const meterId = process.env.PAYMENT_METER_ID || 'METER-001';
 
     console.log(`Processing payment on ${networkConfig.networkPassphrase.includes('Test') ? 'Testnet' : 'Mainnet'}...`);
 
     // Amount as u32 (matches contract)
-    const amount = 10;
+    const amount = Number(process.env.PAYMENT_AMOUNT || '10');
 
     const tx = await client.pay_bill({
         meter_id: meterId,

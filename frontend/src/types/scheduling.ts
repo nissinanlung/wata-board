@@ -1,70 +1,51 @@
-export enum PaymentFrequency {
-  ONCE = 'once',
-  DAILY = 'daily',
-  WEEKLY = 'weekly',
-  BIWEEKLY = 'biweekly',
-  MONTHLY = 'monthly',
-  QUARTERLY = 'quarterly',
-  YEARLY = 'yearly'
-}
+/**
+ * Frontend Scheduling Types
+ * Uses shared types directly (ISO string dates) for consistency.
+ */
+import type {
+  PaymentSchedule as SharedPaymentSchedule,
+  ScheduledPayment as SharedScheduledPayment,
+  NotificationSettings as SharedNotificationSettings,
+  PaymentFrequency as SharedPaymentFrequency,
+  PaymentStatus as SharedPaymentStatus
+} from '../../../shared/types';
 
-export enum PaymentStatus {
-  PENDING = 'pending',
-  SCHEDULED = 'scheduled',
-  PROCESSING = 'processing',
-  COMPLETED = 'completed',
-  FAILED = 'failed',
-  CANCELLED = 'cancelled',
-  PAUSED = 'paused'
-}
+// Re-export shared types directly — no Date conversion, keep strings
+export type PaymentSchedule = SharedPaymentSchedule;
+export type ScheduledPayment = SharedScheduledPayment;
+export type NotificationSettings = SharedNotificationSettings;
 
+// Re-export enum values for backward compatibility
+export const PaymentFrequency = {
+  ONCE: 'once' as const,
+  DAILY: 'daily' as const,
+  WEEKLY: 'weekly' as const,
+  BIWEEKLY: 'biweekly' as const,
+  MONTHLY: 'monthly' as const,
+  QUARTERLY: 'quarterly' as const,
+  YEARLY: 'yearly' as const
+};
+
+export const PaymentStatus = {
+  PENDING: 'pending' as const,
+  SCHEDULED: 'scheduled' as const,
+  PROCESSING: 'processing' as const,
+  COMPLETED: 'completed' as const,
+  FAILED: 'failed' as const,
+  CANCELLED: 'cancelled' as const,
+  PAUSED: 'paused' as const
+};
+
+export type PaymentFrequency = SharedPaymentFrequency;
+export type PaymentStatus = SharedPaymentStatus;
+
+// Additional frontend-specific enums
 export enum NotificationType {
   PAYMENT_DUE = 'payment_due',
   PAYMENT_SUCCESS = 'payment_success',
   PAYMENT_FAILED = 'payment_failed',
   SCHEDULE_CREATED = 'schedule_created',
   SCHEDULE_CANCELLED = 'schedule_cancelled'
-}
-
-export interface PaymentSchedule {
-  id: string;
-  userId: string;
-  meterId: string;
-  amount: number;
-  frequency: PaymentFrequency;
-  startDate: Date;
-  endDate?: Date;
-  nextPaymentDate: Date;
-  status: PaymentStatus;
-  description?: string;
-  maxPayments?: number;
-  currentPaymentCount: number;
-  createdAt: Date;
-  updatedAt: Date;
-  notificationSettings: NotificationSettings;
-  paymentHistory: ScheduledPayment[];
-}
-
-export interface ScheduledPayment {
-  id: string;
-  scheduleId: string;
-  amount: number;
-  scheduledDate: Date;
-  actualPaymentDate?: Date;
-  status: PaymentStatus;
-  transactionId?: string;
-  errorMessage?: string;
-  retryCount: number;
-  createdAt: Date;
-}
-
-export interface NotificationSettings {
-  email: boolean;
-  push: boolean;
-  sms: boolean;
-  reminderDays: number[];
-  successNotification: boolean;
-  failureNotification: boolean;
 }
 
 export interface ScheduleFormData {
@@ -93,13 +74,13 @@ export interface PaymentAnalytics {
   totalFailed: number;
   averageAmount: number;
   nextPaymentAmount: number;
-  nextPaymentDate: Date;
+  nextPaymentDate: string;
   activeSchedules: number;
   monthlyProjection: number;
 }
 
 export interface CalendarEvent {
-  date: Date;
+  date: string;
   payments: ScheduledPayment[];
   totalAmount: number;
   status: 'upcoming' | 'completed' | 'failed';
@@ -117,9 +98,38 @@ export interface ScheduleValidationResult {
   warnings: ScheduleValidationError[];
 }
 
+// Conflict detection types
+export interface PaymentConflict {
+  id: string;
+  type: 'duplicate_schedule' | 'overlapping_payment' | 'same_meter_conflict';
+  severity: 'low' | 'medium' | 'high';
+  message: string;
+  conflictingScheduleIds: string[];
+  suggestedResolution: 'merge' | 'replace' | 'keep_both' | 'cancel_one';
+  details?: {
+    meterId: string;
+    conflictingAmounts?: number[];
+    conflictingDates?: string[];
+    frequency?: PaymentFrequency;
+  };
+}
+
+export interface ConflictResolution {
+  conflictId: string;
+  action: 'merge' | 'replace' | 'keep_both' | 'cancel_one';
+  selectedScheduleId?: string;
+  mergedScheduleData?: Partial<ScheduleFormData>;
+}
+
+export interface ConflictDetectionResult {
+  hasConflicts: boolean;
+  conflicts: PaymentConflict[];
+  resolutions: ConflictResolution[];
+}
+
 // Helper types for calculations
 export interface PaymentCalculation {
-  nextPaymentDate: Date;
+  nextPaymentDate: string;
   paymentCount: number;
   remainingPayments: number;
   totalAmount: number;
@@ -159,9 +169,9 @@ export interface CancelScheduleResponse {
 
 // Calendar view types
 export interface CalendarView {
-  month: Date;
+  month: string;
   events: CalendarEvent[];
-  selectedDate?: Date;
+  selectedDate?: string;
   viewMode: 'month' | 'week' | 'day';
 }
 
@@ -170,7 +180,7 @@ export interface RecurrenceRule {
   frequency: PaymentFrequency;
   interval: number;
   count?: number;
-  until?: Date;
+  until?: string;
   byWeekDay?: number[];
   byMonthDay?: number[];
 }
@@ -181,7 +191,7 @@ export interface PaymentNotification {
   scheduleId: string;
   paymentId?: string;
   message: string;
-  scheduledDate: Date;
+  scheduledDate: string;
   amount: number;
   meterId: string;
   actionUrl?: string;
@@ -191,8 +201,8 @@ export interface PaymentNotification {
 export interface ScheduleExport {
   format: 'csv' | 'json' | 'pdf';
   dateRange: {
-    start: Date;
-    end: Date;
+    start: string;
+    end: string;
   };
   includeHistory: boolean;
   includeAnalytics: boolean;

@@ -7,9 +7,11 @@ import {
 import type {
   PaymentSchedule,
   ScheduledPayment,
-  CalendarEvent
+  CalendarEvent,
+  ConflictDetectionResult
 } from '../types/scheduling';
 import { SchedulingService } from '../services/schedulingService';
+import { LoadingSpinner } from './LoadingSpinner';
 
 interface ScheduledPaymentsListProps {
   userId: string;
@@ -35,6 +37,11 @@ export function ScheduledPaymentsList({ userId, onEditSchedule, onNewSchedule }:
     amountRange: { min: '', max: '' }
   });
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [conflictWarnings, setConflictWarnings] = useState<ConflictDetectionResult>({
+    hasConflicts: false,
+    conflicts: [],
+    resolutions: []
+  });
 
   const service = SchedulingService.getInstance();
 
@@ -45,6 +52,7 @@ export function ScheduledPaymentsList({ userId, onEditSchedule, onNewSchedule }:
   useEffect(() => {
     if (schedules.length > 0) {
       loadCalendarEvents();
+      detectScheduleConflicts();
     }
   }, [schedules, currentMonth]);
 
@@ -73,6 +81,44 @@ export function ScheduledPaymentsList({ userId, onEditSchedule, onNewSchedule }:
     } catch (error) {
       console.error('Failed to load calendar events:', error);
     }
+  };
+
+  const detectScheduleConflicts = () => {
+    const conflicts: any[] = [];
+    
+    // Check for schedules with the same meter ID
+    const meterGroups = schedules.reduce((groups, schedule) => {
+      const meterId = schedule.meterId;
+      if (!groups[meterId]) {
+        groups[meterId] = [];
+      }
+      groups[meterId].push(schedule);
+      return groups;
+    }, {} as Record<string, PaymentSchedule[]>);
+
+    Object.entries(meterGroups).forEach(([meterId, meterSchedules]) => {
+      if (meterSchedules.length > 1) {
+        // Found potential conflicts for this meter
+        meterSchedules.forEach((schedule, index) => {
+          if (index > 0) { // Skip the first one as it's the reference
+            conflicts.push({
+              id: `conflict_${Date.now()}_${index}`,
+              type: 'same_meter_conflict',
+              severity: 'medium',
+              message: `Multiple payment schedules found for meter ${meterId}`,
+              conflictingScheduleIds: [meterSchedules[0].id, schedule.id],
+              suggestedResolution: 'replace'
+            });
+          }
+        });
+      }
+    });
+
+    setConflictWarnings({
+      hasConflicts: conflicts.length > 0,
+      conflicts,
+      resolutions: []
+    });
   };
 
   const handleCancelSchedule = async (scheduleId: string) => {
@@ -298,8 +344,8 @@ export function ScheduledPaymentsList({ userId, onEditSchedule, onNewSchedule }:
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+      <div aria-busy="true" className="flex items-center justify-center h-64">
+        <LoadingSpinner size="md" label="Loading scheduled payments" />
       </div>
     );
   }
@@ -315,12 +361,39 @@ export function ScheduledPaymentsList({ userId, onEditSchedule, onNewSchedule }:
         {onNewSchedule && (
           <button
             onClick={onNewSchedule}
-            className="px-4 h-10 bg-sky-500 hover:bg-sky-400 text-white font-medium rounded-lg transition-colors"
+            disabled={loading}
+            className="px-4 h-10 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
           >
             New Schedule
           </button>
         )}
       </div>
+
+      {/* Conflict Warnings */}
+      {conflictWarnings.hasConflicts && (
+        <div className="bg-amber-500/10 border border-amber-500/20 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0">
+              <svg className="h-5 w-5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <h3 className="text-sm font-medium text-amber-300 mb-2">Payment Conflicts Detected</h3>
+              <div className="space-y-1">
+                {conflictWarnings.conflicts.map((conflict, index) => (
+                  <p key={conflict.id} className="text-xs text-amber-200">
+                    • {conflict.message}
+                  </p>
+                ))}
+              </div>
+              <p className="text-xs text-amber-300/70 mt-2">
+                Consider reviewing these schedules to avoid duplicate payments.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Enhanced Search and Filter */}
       <div className="flex flex-col sm:flex-row gap-4">

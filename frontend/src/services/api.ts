@@ -4,54 +4,47 @@
  */
 
 import React from 'react';
+import { 
+  PaymentRequest as SharedPaymentRequest, 
+  PaymentResponse, 
+  RateLimitStatus, 
+  PaymentInfo, 
+  HealthStatus 
+} from '../../../shared/types';
 
+// Legacy interface for backward compatibility - deprecated
 export interface PaymentRequest {
   meter_id: string;
   amount: number;
   userId: string;
 }
 
-export interface PaymentResponse {
-  success: boolean;
-  transactionId?: string;
-  error?: string;
-  rateLimitInfo?: {
-    remainingRequests?: number;
-    resetTime?: string;
-    queued?: boolean;
-    queuePosition?: number;
+// Helper function to convert legacy PaymentRequest to standardized format
+function convertToStandardRequest(legacyRequest: PaymentRequest): SharedPaymentRequest {
+  return {
+    meterId: legacyRequest.meter_id,
+    amount: legacyRequest.amount,
+    userId: legacyRequest.userId,
+    timestamp: new Date().toISOString()
   };
 }
 
-export interface RateLimitStatus {
-  success: boolean;
-  data?: {
-    remainingRequests: number;
-    resetTime: Date;
-    allowed: boolean;
-    queued: boolean;
-    queuePosition?: number;
-    queueLength: number;
+// Helper function to convert standardized request to legacy format for API calls
+function convertToLegacyRequest(standardRequest: SharedPaymentRequest): PaymentRequest {
+  return {
+    meter_id: standardRequest.meterId,
+    amount: standardRequest.amount,
+    userId: standardRequest.userId
   };
-  error?: string;
 }
 
-export interface PaymentInfo {
-  success: boolean;
-  data?: {
-    meterId: string;
-    totalPaid: number;
-    network: string;
-  };
-  error?: string;
-}
-
-export interface HealthStatus {
-  status: string;
-  timestamp: string;
-  version: string;
-  environment: string;
-}
+// Re-export standardized types for backward compatibility
+export type { 
+  PaymentResponse, 
+  RateLimitStatus, 
+  PaymentInfo, 
+  HealthStatus 
+} from '../../../shared/types';
 
 class ApiService {
   private baseURL: string;
@@ -64,8 +57,8 @@ class ApiService {
   }
 
   private getProductionApiUrl(): string {
-    // In production, use the configured API URL
-    return import.meta.env.VITE_API_URL || 'https://your-api-domain.com';
+    // In production, use the configured API URL. This must be provided via VITE_API_URL.
+    return import.meta.env.VITE_API_URL || '';
   }
 
   private async request<T>(
@@ -91,20 +84,20 @@ class ApiService {
         const errorData = await response.json().catch(() => ({}));
         
         if (response.status === 403) {
-          throw new Error('CORS policy violation. Check your domain configuration.');
+          throw new Error("We're having trouble connecting. Please contact support if this keeps happening.");
         }
         
         if (response.status === 429) {
           throw new Error(errorData.error || 'Rate limit exceeded. Please try again later.');
         }
         
-        throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        throw new Error(errorData.error || "Something went wrong on our end. Please try again.");
       }
 
       return await response.json();
     } catch (error) {
       if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Network error. Unable to connect to the API server.');
+        throw new Error("Can't connect to the server. Please check your internet connection and try again.");
       }
       throw error;
     }
@@ -114,9 +107,28 @@ class ApiService {
    * Process a utility payment
    */
   async processPayment(request: PaymentRequest): Promise<PaymentResponse> {
+    // Convert to standardized format for internal consistency
+    const standardRequest = convertToStandardRequest(request);
+    
+    // Convert back to legacy format for API compatibility
+    const legacyRequest = convertToLegacyRequest(standardRequest);
+    
     return this.request<PaymentResponse>('/payment', {
       method: 'POST',
-      body: JSON.stringify(request),
+      body: JSON.stringify(legacyRequest),
+    });
+  }
+
+  /**
+   * Process a utility payment using standardized format (preferred method)
+   */
+  async processPaymentStandard(request: SharedPaymentRequest): Promise<PaymentResponse> {
+    // Convert to legacy format for API compatibility
+    const legacyRequest = convertToLegacyRequest(request);
+    
+    return this.request<PaymentResponse>('/payment', {
+      method: 'POST',
+      body: JSON.stringify(legacyRequest),
     });
   }
 
