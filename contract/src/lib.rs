@@ -187,7 +187,7 @@ impl NepaBillingContract {
         if meter_id_len < METER_ID_MIN_LENGTH || meter_id_len > METER_ID_MAX_LENGTH {
             panic!("Meter ID must be between 3 and 50 characters");
         }
-        let meter_id_bytes = meter_id.to_bytes();
+        let meter_id_bytes: Vec<u8> = meter_id.clone().into();
         for i in 0..meter_id_len {
             let b = meter_id_bytes.get(i as u32).unwrap_or(0);
             let is_valid = (b >= 65 && b <= 90)

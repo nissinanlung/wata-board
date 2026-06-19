@@ -3,8 +3,9 @@ import QRCode from 'qrcode';
 import type { FrontendReceipt, FrontendReceiptData, ReceiptGenerationOptions as FrontendReceiptGenerationOptions } from '../types/receipt';
 import type { PaymentReceipt, PDFReceiptOptions } from '../types/receipt';
 import { toISOString, fromDateISOString } from '../../../shared/types';
-import { formatXLM } from './walletBalance';
+import { balanceUtils } from './walletBalance';
 import { formatDate } from '../i18n/index';
+const formatXLM = balanceUtils.formatXLM;
 
 type Receipt = FrontendReceipt;
 type ReceiptData = FrontendReceiptData;
@@ -270,7 +271,8 @@ export async function generateReceiptPDF(
 
   doc.setFillColor(255, 255, 255, 0.15);
   doc.roundedRect(PAGE_W - MARGIN - 30, y - 6, 30, 10, 2, 2, "F");
-  doc.setTextColor(...(receipt.meterType === "water" ? [207, 250, 254] : [254, 243, 199]));
+  const badgeTextColor = receipt.meterType === "water" ? [207, 250, 254] as const : [254, 243, 199] as const;
+  doc.setTextColor(...badgeTextColor);
   doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
   doc.text(badgeLabel, PAGE_W - MARGIN - 15, y - 0.5, { align: "center" });
@@ -367,9 +369,9 @@ export async function generateReceiptPDF(
 
     doc.setDrawColor(...COLORS.muted);
     doc.setLineWidth(0.2);
-    doc.setLineDash([1, 2]);
+    (doc as any).setLineDash([1, 2]);
     doc.line(MARGIN + 3, yPos + 6.5, PAGE_W - MARGIN - 2, yPos + 6.5);
-    doc.setLineDash([]);
+    (doc as any).setLineDash([]);
   }
 
   if (receipt.customerAddress) {
