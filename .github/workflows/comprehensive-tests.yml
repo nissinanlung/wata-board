@@ -185,6 +185,9 @@ jobs:
     - name: Install stellar-cli
       uses: stellar/stellar-cli@v27.0.0
 
+    - name: Install wasm32v1-none target
+      run: rustup target add wasm32v1-none
+
     - name: Build contract
       run: stellar contract build
       working-directory: ./contract
