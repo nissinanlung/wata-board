@@ -281,16 +281,27 @@ app.post('/api/v2/payment', async (req, res) => {
 
 app.post('/api/v1/payment/multi-provider', async (req, res) => {
   try {
-    const { meter_id, amount, userId, providerId } = req.body;
-    if (!meter_id || !amount || !userId || !providerId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
-    }
-    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
-      return res.status(400).json({ success: false, error: 'Invalid field types' });
-    }
-    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    const providerId = sanitizeAlphanumeric(raw.providerId, 100);
+    if (!providerId) errors.push(validationError('providerId', 'providerId must be an alphanumeric string (max 100 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
-    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const provider = providerService.getProviderById(providerId);
+    if (!provider || !provider.isActive) {
+      return res.status(400).json({
+        success: false,
+        errors: [validationError('providerId', `Provider ${providerId} is not available or does not exist`)]
+      });
+    }
+
+    const paymentRequest: ProviderPaymentRequest = { meter_id, amount, userId, providerId };
     const result = await multiProviderPaymentService.processPayment(paymentRequest);
     res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
 
@@ -311,16 +322,69 @@ app.post('/api/v1/payment/multi-provider', async (req, res) => {
 
 app.post('/api/v2/payment/multi-provider', async (req, res) => {
   try {
-    const { meter_id, amount, userId, providerId } = req.body;
-    if (!meter_id || !amount || !userId || !providerId) {
-      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
-    }
-    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
-      return res.status(400).json({ success: false, error: 'Invalid field types' });
-    }
-    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    const providerId = sanitizeAlphanumeric(raw.providerId, 100);
+    if (!providerId) errors.push(validationError('providerId', 'providerId must be an alphanumeric string (max 100 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
 
-    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const provider = providerService.getProviderById(providerId);
+    if (!provider || !provider.isActive) {
+      return res.status(400).json({
+        success: false,
+        errors: [validationError('providerId', `Provider ${providerId} is not available or does not exist`)]
+      });
+    }
+
+    const paymentRequest: ProviderPaymentRequest = { meter_id, amount, userId, providerId };
+    const result = await multiProviderPaymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if (result.success) {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: result.transactionId, providerId: result.providerId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'failed');
+      if (result.error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      if (result.error?.includes('queued')) return res.status(202).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Multi-provider payment processing exception', { error, body: req.body });
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Legacy multi-provider route (backward compatibility)
+app.post('/api/payment/multi-provider', async (req, res) => {
+  try {
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    const providerId = sanitizeAlphanumeric(raw.providerId, 100);
+    if (!providerId) errors.push(validationError('providerId', 'providerId must be an alphanumeric string (max 100 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
+
+    const provider = providerService.getProviderById(providerId);
+    if (!provider || !provider.isActive) {
+      return res.status(400).json({
+        success: false,
+        errors: [validationError('providerId', `Provider ${providerId} is not available or does not exist`)]
+      });
+    }
+
+    const paymentRequest: ProviderPaymentRequest = { meter_id, amount, userId, providerId };
     const result = await multiProviderPaymentService.processPayment(paymentRequest);
     res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
 
