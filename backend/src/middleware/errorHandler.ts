@@ -57,12 +57,14 @@ export const apiErrorHandler: express.ErrorRequestHandler = (err, req, res, next
     return next(err);
   }
 
+  const requestId = (req as any).requestId as string | undefined;
+
   if (err?.name === 'UnauthorizedError') {
-    return res.status(401).json({ success: false, error: 'Unauthorized' });
+    return res.status(401).json({ success: false, error: 'Unauthorized', requestId });
   }
 
   if (err?.message === 'Not allowed by CORS') {
-    return res.status(403).json({ success: false, error: 'CORS policy violation' });
+    return res.status(403).json({ success: false, error: 'CORS policy violation', requestId });
   }
 
   logger.error('Unhandled server error', {
@@ -71,6 +73,7 @@ export const apiErrorHandler: express.ErrorRequestHandler = (err, req, res, next
     path: req.path,
     method: req.method,
     body: req.body,
+    requestId,
   });
 
   void captureException(err, {
@@ -78,7 +81,8 @@ export const apiErrorHandler: express.ErrorRequestHandler = (err, req, res, next
     path: req.path,
     method: req.method,
     body: req.body,
+    requestId,
   });
 
-  res.status(500).json({ success: false, error: 'Internal server error' });
+  res.status(500).json({ success: false, error: 'Internal server error', requestId });
 };

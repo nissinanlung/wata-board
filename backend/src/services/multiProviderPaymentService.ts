@@ -1,4 +1,4 @@
-import { RateLimiter, RateLimitConfig } from '../rate-limiter';
+import { RateLimiter, RateLimitConfig, toRateLimitInfo } from '../rate-limiter';
 import { ProviderService } from './providerService';
 import { ProviderPaymentRequest, ProviderPaymentResult, UtilityProvider } from '../types/provider';
 import { notifyPaymentWebhook } from './paymentWebhookService';
@@ -8,8 +8,10 @@ export class MultiProviderPaymentService {
   private rateLimiter: RateLimiter;
   private providerService: ProviderService;
   private providerRateLimiters: Map<string, RateLimiter> = new Map();
+  private defaultRateLimitConfig: RateLimitConfig;
 
   constructor(rateLimitConfig: RateLimitConfig, providerService: ProviderService) {
+    this.defaultRateLimitConfig = rateLimitConfig;
     this.rateLimiter = new RateLimiter(rateLimitConfig);
     this.providerService = providerService;
     this.initializeProviderRateLimiters();
@@ -23,13 +25,32 @@ export class MultiProviderPaymentService {
     
     providers.forEach(provider => {
       const providerRateLimitConfig: RateLimitConfig = {
-        windowMs: 60 * 1000,  // 1 minute
-        maxRequests: 5,        // 5 transactions per minute
-        queueSize: 10          // Allow 10 queued requests
+        windowMs: this.defaultRateLimitConfig.windowMs,
+        maxRequests: this.defaultRateLimitConfig.maxRequests,
+        queueSize: this.defaultRateLimitConfig.queueSize ?? 10,
       };
       
       this.providerRateLimiters.set(provider.id, new RateLimiter(providerRateLimitConfig));
     });
+  }
+
+  /**
+   * Ensure a provider-specific rate limiter exists.
+   */
+  private ensureProviderRateLimiter(providerId: string): RateLimiter {
+    const existing = this.providerRateLimiters.get(providerId);
+    if (existing) {
+      return existing;
+    }
+
+    const providerRateLimitConfig: RateLimitConfig = {
+      windowMs: this.defaultRateLimitConfig.windowMs,
+      maxRequests: this.defaultRateLimitConfig.maxRequests,
+      queueSize: this.defaultRateLimitConfig.queueSize ?? 10,
+    };
+    const limiter = new RateLimiter(providerRateLimitConfig);
+    this.providerRateLimiters.set(providerId, limiter);
+    return limiter;
   }
 
   /**
@@ -73,29 +94,9 @@ export class MultiProviderPaymentService {
       // For now, we'll proceed assuming the provider supports the meter type
 
       // Check rate limit for the specific provider
-      const providerRateLimiter = this.providerRateLimiters.get(request.providerId);
-      if (!providerRateLimiter) {
-        const errorMessage = 'Rate limiter not configured for provider';
-        void notifyPaymentWebhook({
-          event: 'payment.failed',
-          paymentId,
-          userId: request.userId,
-          meterId: request.meter_id,
-          amount: request.amount,
-          providerId: request.providerId,
-          status: 'provider_rate_limiter_missing',
-          timestamp: new Date().toISOString(),
-          reason: errorMessage
-        });
-
-        return {
-          success: false,
-          providerId: request.providerId,
-          error: errorMessage
-        };
-      }
-
+      const providerRateLimiter = this.ensureProviderRateLimiter(request.providerId);
       const rateLimitResult = await providerRateLimiter.checkLimit(request.userId);
+      const rateLimitInfo = toRateLimitInfo(rateLimitResult);
       
       if (!rateLimitResult.allowed && !rateLimitResult.queued) {
         const errorMessage = this.getRateLimitError(rateLimitResult);
@@ -110,7 +111,7 @@ export class MultiProviderPaymentService {
           meterId: request.meter_id,
           amount: request.amount,
           paymentId,
-          rateLimitInfo: rateLimitResult
+          rateLimitInfo,
         });
         void notifyPaymentWebhook({
           event: 'payment.failed',
@@ -122,14 +123,14 @@ export class MultiProviderPaymentService {
           status: 'rate_limit_exceeded',
           timestamp: new Date().toISOString(),
           reason: errorMessage,
-          rateLimitInfo: rateLimitResult
+          rateLimitInfo,
         });
 
         return {
           success: false,
           providerId: request.providerId,
           error: errorMessage,
-          rateLimitInfo: rateLimitResult
+          rateLimitInfo,
         };
       }
 
@@ -147,7 +148,7 @@ export class MultiProviderPaymentService {
           amount: request.amount,
           paymentId,
           queuePosition: rateLimitResult.queuePosition,
-          rateLimitInfo: rateLimitResult
+          rateLimitInfo,
         });
         void notifyPaymentWebhook({
           event: 'payment.queued',
@@ -159,14 +160,14 @@ export class MultiProviderPaymentService {
           status: 'queued',
           timestamp: new Date().toISOString(),
           reason: queueMessage,
-          rateLimitInfo: rateLimitResult
+          rateLimitInfo,
         });
 
         return {
           success: false,
           providerId: request.providerId,
           error: queueMessage,
-          rateLimitInfo: rateLimitResult
+          rateLimitInfo,
         };
       }
 
@@ -193,14 +194,14 @@ export class MultiProviderPaymentService {
         providerId: request.providerId,
         status: 'success',
         timestamp: new Date().toISOString(),
-        rateLimitInfo: rateLimitResult
+        rateLimitInfo,
       });
       
       return {
         success: true,
         transactionId,
         providerId: request.providerId,
-        rateLimitInfo: rateLimitResult
+        rateLimitInfo,
       };
 
     } catch (error) {
@@ -241,7 +242,7 @@ export class MultiProviderPaymentService {
     const { updateTransactionStatus } = await import('./websocketService');
     
     // Import the client dynamically to avoid circular dependencies
-    const NepaClient = await import('../../../contract/nepa_client_v2' as any);
+    const NepaClient = await import('../../packages/nepa_client_v2' as any);
     
     const client = new NepaClient.Client({
       networkPassphrase: provider.network === 'testnet' ? 'Test SDF Network ; September 2015' : 'Public Global Stellar Network ; September 2015',
@@ -301,7 +302,7 @@ export class MultiProviderPaymentService {
     }
 
     // Import the client dynamically
-    const NepaClient = await import('../../../contract/nepa_client_v2' as any);
+    const NepaClient = await import('../../packages/nepa_client_v2' as any);
     
     const client = new NepaClient.Client({
       networkPassphrase: provider.network === 'testnet' ? 'Test SDF Network ; September 2015' : 'Public Global Stellar Network ; September 2015',
@@ -323,9 +324,10 @@ export class MultiProviderPaymentService {
    */
   getRateLimitStatus(userId: string): Record<string, any> {
     const status: Record<string, any> = {};
-    
-    this.providerRateLimiters.forEach((rateLimiter, providerId) => {
-      status[providerId] = rateLimiter.getStatus(userId);
+
+    this.providerService.getActiveProviders().forEach((provider) => {
+      const rateLimiter = this.ensureProviderRateLimiter(provider.id);
+      status[provider.id] = rateLimiter.getStatus(userId);
     });
 
     return status;
@@ -335,11 +337,7 @@ export class MultiProviderPaymentService {
    * Get rate limit status for a specific provider
    */
   getProviderRateLimitStatus(userId: string, providerId: string): any {
-    const rateLimiter = this.providerRateLimiters.get(providerId);
-    if (!rateLimiter) {
-      throw new Error(`Rate limiter not found for provider ${providerId}`);
-    }
-
+    const rateLimiter = this.ensureProviderRateLimiter(providerId);
     return rateLimiter.getStatus(userId);
   }
 
