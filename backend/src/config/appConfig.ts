@@ -368,4 +368,3 @@ function isObject(
 
 export const config =
   loadConfig();
-  

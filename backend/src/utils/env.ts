@@ -254,10 +254,9 @@ function validateSchema() {
           : schema.defaultValue;
     } catch (error) {
       throw new Error(
-        `[Config] ${key}: ${
-          error instanceof Error
-            ? error.message
-            : String(error)
+        `[Config] ${key}: ${error instanceof Error
+          ? error.message
+          : String(error)
         }`
       );
     }
@@ -281,17 +280,17 @@ function parseEnv(): EnvConfig {
 
   const NODE_ENV =
     config.NODE_ENV as
-      | 'development'
-      | 'production'
-      | 'test';
+    | 'development'
+    | 'production'
+    | 'test';
 
   const HTTPS_ENABLED =
     config.HTTPS_ENABLED as boolean;
 
   const NETWORK =
     config.NETWORK as
-      | 'testnet'
-      | 'mainnet';
+    | 'testnet'
+    | 'mainnet';
 
   const LOG_LEVEL =
     config.LOG_LEVEL as string;
@@ -354,7 +353,7 @@ function parseEnv(): EnvConfig {
 
   if (
     NODE_ENV ===
-      'production' &&
+    'production' &&
     !API_KEY
   ) {
     errors.push(
