@@ -17,7 +17,7 @@ import upgradeRoutes from './routes/upgrade';
 import currencyRoutes from './routes/currency';
 import providerRoutes from './routes/providers';
 import { apiErrorHandler } from './middleware/errorHandler';
-import { StandardErrorHandler, ErrorHandlerUtils, requestContextMiddleware, handleUnhandledRejections } from './utils/standardErrorHandler';
+import { StandardErrorHandler, requestContextMiddleware, handleUnhandledRejections } from './utils/standardErrorHandler';
 import { AnalyticsService } from './services/analyticsService';
 import { getTransactionStatus, startWebsocketService, updateTransactionStatus } from './services/websocketService';
 import { ProviderService } from './services/providerService';
@@ -735,14 +735,6 @@ function getAllowedOrigins(): string[] {
   if (envConfig.NODE_ENV === 'development') origins.push('http://localhost:3000', 'http://localhost:5173');
   else if (envConfig.NODE_ENV === 'production' && envConfig.FRONTEND_URL) origins.push(envConfig.FRONTEND_URL);
   return origins.filter((origin) => origin.trim().length > 0);
-}
-
-function getNetworkConfig() {
-  const network = envConfig.NETWORK;
-  if (network === 'mainnet') {
-    return { networkPassphrase: envConfig.NETWORK_PASSPHRASE_MAINNET, contractId: envConfig.CONTRACT_ID_MAINNET, rpcUrl: envConfig.RPC_URL_MAINNET };
-  }
-  return { networkPassphrase: envConfig.NETWORK_PASSPHRASE_TESTNET, contractId: envConfig.CONTRACT_ID_TESTNET, rpcUrl: envConfig.RPC_URL_TESTNET };
 }
 
 function buildMockPaymentHistory(userId: string, recordCount: number): PaymentHistoryRecord[] {
