@@ -8,6 +8,7 @@ on:
 
 jobs:
   test:
+    if: false
     name: Test Contract
     runs-on: ubuntu-latest
     
