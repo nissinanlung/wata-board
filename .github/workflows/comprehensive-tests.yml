@@ -185,8 +185,8 @@ jobs:
           ${{ runner.os }}-cargo-
           
     - name: Install stellar-cli
-      run: cargo install stellar-cli --locked
-      
+      uses: stellar/stellar-cli@v27.0.0
+
     - name: Build contract
       run: stellar contract build
       working-directory: ./contract
@@ -249,7 +249,6 @@ jobs:
         
     - name: Build contract
       run: |
-        cargo install stellar-cli --locked
         stellar contract build
       working-directory: ./contract
       
