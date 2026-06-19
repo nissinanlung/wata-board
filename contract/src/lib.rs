@@ -187,13 +187,14 @@ impl NepaBillingContract {
         if meter_id_len < METER_ID_MIN_LENGTH || meter_id_len > METER_ID_MAX_LENGTH {
             panic!("Meter ID must be between 3 and 50 characters");
         }
+        let meter_id_bytes = meter_id.to_bytes();
         for i in 0..meter_id_len {
-            let c = meter_id.get(i).unwrap_or(' ');
-            let is_valid = (c >= 'A' && c <= 'Z')
-                || (c >= 'a' && c <= 'z')
-                || (c >= '0' && c <= '9')
-                || c == '-'
-                || c == '_';
+            let b = meter_id_bytes.get(i as u32).unwrap_or(0);
+            let is_valid = (b >= 65 && b <= 90)
+                || (b >= 97 && b <= 122)
+                || (b >= 48 && b <= 57)
+                || b == 45
+                || b == 95;
             if !is_valid {
                 panic!("Meter ID contains invalid characters (alphanumeric, hyphens, and underscores only)");
             }
@@ -681,7 +682,7 @@ impl NepaBillingContract {
         if is_add {
             // Add approver if not already present
             if !config.approvers.contains(&approver) {
-                config.approvers.push_back(approver);
+                config.approvers.push_back(approver.clone());
                 env.storage().persistent().set(&(APPROVER_STATUS, approver), &true);
             }
         } else {

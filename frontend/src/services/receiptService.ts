@@ -1,7 +1,7 @@
 import html2pdf from 'html2pdf.js';
 import QRCode from 'qrcode';
 import type { FrontendReceipt, FrontendReceiptData, ReceiptGenerationOptions as FrontendReceiptGenerationOptions } from '../types/receipt';
-import type { PaymentReceipt, ReceiptGenerationOptions } from '../types/receipt';
+import type { PaymentReceipt, PDFReceiptOptions } from '../types/receipt';
 import { toISOString, fromDateISOString } from '../../../shared/types';
 import { formatXLM } from './walletBalance';
 import { formatDate } from '../i18n/index';
@@ -229,7 +229,7 @@ const COLORS = {
 
 export async function generateReceiptPDF(
   receipt: PaymentReceipt,
-  options: ReceiptGenerationOptions = {}
+  options: PDFReceiptOptions = {}
 ): Promise<void> {
   const { jsPDF } = await import("jspdf");
 
