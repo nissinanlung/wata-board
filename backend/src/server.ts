@@ -161,8 +161,12 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
 
 app.use(metricsCollector.middleware());
 app.use(versioningMiddleware);
-app.use('/api/v1/payment', tieredRateLimiter.middleware());
-app.use('/api/v2/payment', tieredRateLimiter.middleware());
+
+// ── Rate limiting for ALL API endpoints ──────────────────────
+// Auto-detects endpoint type from HTTP method:
+//   GET / HEAD / OPTIONS → READ (3x tier limit)
+//   POST / PUT / DELETE / PATCH → WRITE (1x tier limit)
+app.use('/api', tieredRateLimiter.middleware());
 
 // Versioned routes
 app.use('/api/v1/monitoring', monitoringRoutes);
