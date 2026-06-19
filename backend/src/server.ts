@@ -30,7 +30,7 @@ import { captureAndTrackConfig } from './utils/configSnapshot';
 import { captureException } from './utils/errorTracker';
 import { envConfig } from './utils/env';
 import { config } from './config/appConfig';
-import { sanitizeString, sanitizeAlphanumeric, sanitizePositiveNumber, validationError, type ValidationError } from './utils/sanitize';
+import { sanitizeString, sanitizeAlphanumeric, sanitizePositiveNumber, sanitizeMeterId, validationError, type ValidationError } from './utils/sanitize';
 import { versioningMiddleware } from './middleware/versioning';
 import realTimeMonitoringRoutes from './routes/realTimeMonitoring';
 import { database } from './utils/database';

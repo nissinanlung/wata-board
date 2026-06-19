@@ -7,6 +7,7 @@ import { RateLimitConfig } from '../rate-limiter';
 import logger from '../utils/logger';
 import {
   sanitizeAlphanumeric,
+  sanitizeMeterId,
   sanitizeString,
   sanitizePositiveNumber,
   validationError,
@@ -60,9 +61,9 @@ router.post('/', async (req, res) => {
       errors.push(validationError('userId', 'Valid user ID is required'));
     }
 
-    const sanitizedMeterId = sanitizeAlphanumeric(meterId, 50);
+    const sanitizedMeterId = sanitizeMeterId(meterId);
     if (!sanitizedMeterId) {
-      errors.push(validationError('meterId', 'Valid meter ID is required'));
+      errors.push(validationError('meterId', 'meterId must be 3-50 alphanumeric characters (hyphens and underscores allowed)'));
     }
 
     const sanitizedAmount = sanitizePositiveNumber(amount);

@@ -94,6 +94,87 @@ describe('OWASP Security Tests', () => {
           .expect(400);
       }
     });
+
+    it('should reject meter IDs with SQL injection payloads', async () => {
+      const sqlInjectionPayloads = [
+        "'; DROP TABLE payments; --",
+        "METER-001'; DELETE FROM users; --",
+        "' OR '1'='1",
+        "'; EXEC xp_cmdshell('dir'); --",
+        "1; SELECT * FROM admin",
+      ];
+
+      for (const payload of sqlInjectionPayloads) {
+        const response = await request(app)
+          .post('/api/pay')
+          .send({ meter_id: payload, amount: 50 })
+          .expect(400);
+
+        expect(response.body).toHaveProperty('error');
+      }
+    });
+
+    it('should reject meter IDs with script injection payloads', async () => {
+      const xssPayloads = [
+        '<script>alert("XSS")</script>',
+        'METER-001<img src=x onerror=alert(1)>',
+        'javascript:alert(document.cookie)',
+        '"><script>fetch("/api/keys")</script>',
+      ];
+
+      for (const payload of xssPayloads) {
+        const response = await request(app)
+          .post('/api/pay')
+          .send({ meter_id: payload, amount: 50 })
+          .expect(400);
+
+        expect(response.body).toHaveProperty('error');
+      }
+    });
+
+    it('should reject meter IDs with special characters', async () => {
+      const invalidMeterIds = [
+        'METER-001; DROP TABLE users;',
+        '..\\..\\..\\etc\\passwd',
+        'METER-001|cat /etc/hosts',
+        'METER-001`whoami`',
+        'METER-001$(cat /etc/passwd)',
+        'METER-001&echo injected',
+        '!@#$%^&*()',
+        '   ', // Whitespace only
+        'ab', // Too short
+        'a'.repeat(51), // Too long
+      ];
+
+      for (const meterId of invalidMeterIds) {
+        const response = await request(app)
+          .post('/api/pay')
+          .send({ meter_id: meterId, amount: 50 })
+          .expect(400);
+
+        expect(response.body).toHaveProperty('error');
+      }
+    });
+
+    it('should accept valid meter ID formats', async () => {
+      const validMeterIds = [
+        'METER-001',
+        'meter_001',
+        'UTILITY-ABC-123',
+        'MTR-123',
+        'a'.repeat(3),
+        'a'.repeat(50),
+      ];
+
+      for (const meterId of validMeterIds) {
+        const response = await request(app)
+          .post('/api/pay')
+          .send({ meter_id: meterId, amount: 50 })
+          .expect(200);
+
+        expect(response.body.success).toBe(true);
+      }
+    });
   });
 
   describe('A04: Insecure Design', () => {
