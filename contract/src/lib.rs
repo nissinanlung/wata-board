@@ -187,12 +187,13 @@ impl NepaBillingContract {
         if meter_id_len < METER_ID_MIN_LENGTH || meter_id_len > METER_ID_MAX_LENGTH {
             panic!("Meter ID must be between 3 and 50 characters");
         }
-        for b in meter_id.iter() {
-            let is_valid = (b >= 65 && b <= 90)
-                || (b >= 97 && b <= 122)
-                || (b >= 48 && b <= 57)
-                || b == 45
-                || b == 95;
+        for i in 0..meter_id_len {
+            let c = meter_id.get(i).unwrap_or(' ');
+            let is_valid = (c >= 'A' && c <= 'Z')
+                || (c >= 'a' && c <= 'z')
+                || (c >= '0' && c <= '9')
+                || c == '-'
+                || c == '_';
             if !is_valid {
                 panic!("Meter ID contains invalid characters (alphanumeric, hyphens, and underscores only)");
             }
@@ -286,7 +287,7 @@ impl NepaBillingContract {
             reviewer: reviewer.clone(),
             rating,
             comment,
-            timestamp: env.ledger().timestamp(),
+            timestamp: env.ledger().timestamp() as i64,
             transaction_hash,
         };
 
@@ -322,7 +323,7 @@ impl NepaBillingContract {
         env.storage().persistent().get(&stats_key).unwrap_or(RatingStats {
             total_reviews: 0,
             average_rating: 0,
-            rating_counts: Vec::from_array(&env, &[0, 0, 0, 0, 0]),
+            rating_counts: Vec::from_array(&env, [0i64, 0, 0, 0, 0]),
         })
     }
 
@@ -339,7 +340,7 @@ impl NepaBillingContract {
         let mut stats: RatingStats = env.storage().persistent().get(&stats_key).unwrap_or(RatingStats {
             total_reviews: 0,
             average_rating: 0,
-            rating_counts: Vec::from_array(&env, &[0, 0, 0, 0, 0]),
+            rating_counts: Vec::from_array(&env, [0i64, 0, 0, 0, 0]),
         });
 
         // Update total reviews
@@ -681,7 +682,7 @@ impl NepaBillingContract {
             // Add approver if not already present
             if !config.approvers.contains(&approver) {
                 config.approvers.push_back(approver);
-                env.storage().persistent().set((APPROVER_STATUS, approver), &true);
+                env.storage().persistent().set(&(APPROVER_STATUS, approver), &true);
             }
         } else {
             // Remove approver
