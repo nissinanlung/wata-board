@@ -3,6 +3,8 @@ import cors from 'cors';
 import helmet from 'helmet';
 import https from 'https';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
+import { Request, Response, NextFunction } from 'express';
 import { PaymentService, PaymentRequest } from './payment-service';
 import { RateLimitConfig } from './rate-limiter';
 import type { RateLimitInfo } from '../../shared/types';
@@ -237,8 +239,29 @@ app.use((err: unknown, req: express.Request, res: express.Response, next: expres
   return next(err);
 });
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use((req, res, next) => {
-  logger.info('Incoming HTTP Request', { method: req.method, path: req.path, ip: req.ip, userAgent: req.get('user-agent') });
+
+// Request ID middleware — generates or propagates a unique ID for every request,
+// attaches it to req.requestId, and sets the X-Request-ID response header.
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const incoming = req.headers['x-request-id'];
+  // Propagate if the caller supplied a valid UUID-shaped header; otherwise generate.
+  const requestId =
+    typeof incoming === 'string' && /^[\w\-]{8,64}$/.test(incoming)
+      ? incoming
+      : randomUUID();
+  (req as any).requestId = requestId;
+  res.setHeader('X-Request-ID', requestId);
+  next();
+});
+
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  logger.info('Incoming HTTP Request', {
+    method: req.method,
+    path: req.path,
+    ip: req.ip,
+    userAgent: req.get('user-agent'),
+    requestId: (req as any).requestId,
+  });
   next();
 });
 
@@ -303,13 +326,194 @@ app.get('/health/full', async (_req, res) => {
   }
 });
 
-// Payment endpoints (v1, v2, and legacy routes share handlers)
-app.post('/api/v1/payment', handlePayment);
-app.post('/api/v2/payment', handlePayment);
-app.post('/api/payment', handlePayment);
-app.post('/api/v1/payment/multi-provider', handleMultiProviderPayment);
-app.post('/api/v2/payment/multi-provider', handleMultiProviderPayment);
-app.post('/api/payment/multi-provider', handleMultiProviderPayment);
+// Versioned payment endpoints
+app.post('/api/v1/payment', async (req, res) => {
+  try {
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
+
+    const paymentRequest: PaymentRequest = { meter_id, amount, userId };
+    const result = await paymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if (result.success) {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: result.transactionId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'failed');
+      if (result.error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
+      if (result.error?.includes('queued')) return res.status(202).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Payment processing exception', { error, body: req.body, requestId: (req as any).requestId });
+    void captureException(error, { source: 'payment-route', body: req.body, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Internal server error', requestId: (req as any).requestId });
+  }
+});
+
+app.post('/api/v2/payment', async (req, res) => {
+  try {
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
+
+    const paymentRequest: PaymentRequest = { meter_id, amount, userId };
+    const result = await paymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if (result.success) {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: result.transactionId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'failed');
+      if (result.error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
+      if (result.error?.includes('queued')) return res.status(202).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: result.error, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Payment processing exception', { error, body: req.body, requestId: (req as any).requestId });
+    void captureException(error, { source: 'payment-route', body: req.body, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Internal server error', requestId: (req as any).requestId });
+  }
+});
+
+// Legacy payment route (backward compatibility)
+app.post('/api/payment', async (req, res) => {
+  try {
+    const raw = req.body;
+    const errors: ValidationError[] = [];
+    const meter_id = sanitizeAlphanumeric(raw.meter_id, 50);
+    if (!meter_id) errors.push(validationError('meter_id', 'meter_id must be an alphanumeric string (max 50 chars)'));
+    const amount = sanitizePositiveNumber(raw.amount);
+    if (Number.isNaN(amount)) errors.push(validationError('amount', 'amount must be a positive number'));
+    const userId = sanitizeAlphanumeric(raw.userId, 100);
+    if (!userId) errors.push(validationError('userId', 'userId must be an alphanumeric string (max 100 chars)'));
+    if (errors.length > 0) return res.status(400).json({ success: false, errors });
+
+    const paymentRequest: PaymentRequest = { meter_id, amount, userId };
+    const result = await paymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if ((result as any).success) {
+      if ((result as any).transactionId) await updateTransactionStatus((result as any).transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: (result as any).transactionId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if ((result as any).transactionId) await updateTransactionStatus((result as any).transactionId, 'failed');
+      if ((result as any).error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: (result as any).error, rateLimitInfo: result.rateLimitInfo });
+      if ((result as any).error?.includes('queued')) return res.status(202).json({ success: false, error: (result as any).error, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: (result as any).error, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Payment processing exception', { error, body: req.body, requestId: (req as any).requestId });
+    void captureException(error, { source: 'payment-route', body: req.body, requestId: (req as any).requestId });
+    return res.status(500).json({ success: false, error: 'Internal server error', requestId: (req as any).requestId });
+  }
+});
+
+app.post('/api/v1/payment/multi-provider', async (req, res) => {
+  try {
+    const { meter_id, amount, userId, providerId } = req.body;
+    if (!meter_id || !amount || !userId || !providerId) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
+    }
+    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
+      return res.status(400).json({ success: false, error: 'Invalid field types' });
+    }
+    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+
+    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const result = await multiProviderPaymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if (result.success) {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: result.transactionId, providerId: result.providerId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'failed');
+      if (result.error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      if (result.error?.includes('queued')) return res.status(202).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Multi-provider payment processing exception', { error, body: req.body });
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+app.post('/api/v2/payment/multi-provider', async (req, res) => {
+  try {
+    const { meter_id, amount, userId, providerId } = req.body;
+    if (!meter_id || !amount || !userId || !providerId) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
+    }
+    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
+      return res.status(400).json({ success: false, error: 'Invalid field types' });
+    }
+    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+
+    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const result = await multiProviderPaymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if (result.success) {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: result.transactionId, providerId: result.providerId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'failed');
+      if (result.error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      if (result.error?.includes('queued')) return res.status(202).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Multi-provider payment processing exception', { error, body: req.body });
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
+
+// Legacy multi-provider route (backward compatibility)
+app.post('/api/payment/multi-provider', async (req, res) => {
+  try {
+    const { meter_id, amount, userId, providerId } = req.body;
+    if (!meter_id || !amount || !userId || !providerId) {
+      return res.status(400).json({ success: false, error: 'Missing required fields: meter_id, amount, userId, providerId' });
+    }
+    if (typeof meter_id !== 'string' || typeof amount !== 'number' || typeof userId !== 'string' || typeof providerId !== 'string') {
+      return res.status(400).json({ success: false, error: 'Invalid field types' });
+    }
+    if (amount <= 0) return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+
+    const paymentRequest: ProviderPaymentRequest = { meter_id: meter_id.trim(), amount, userId: userId.trim(), providerId: providerId.trim() };
+    const result = await multiProviderPaymentService.processPayment(paymentRequest);
+    res.set('X-Rate-Limit-Remaining', result.rateLimitInfo?.remainingRequests?.toString() || '0');
+
+    if (result.success) {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'confirmed');
+      return res.status(200).json({ success: true, transactionId: result.transactionId, providerId: result.providerId, rateLimitInfo: { remainingRequests: result.rateLimitInfo?.remainingRequests, resetTime: result.rateLimitInfo?.resetTime } });
+    } else {
+      if (result.transactionId) await updateTransactionStatus(result.transactionId, 'failed');
+      if (result.error?.includes('Rate limit exceeded')) return res.status(429).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      if (result.error?.includes('queued')) return res.status(202).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+      return res.status(400).json({ success: false, error: result.error, providerId: result.providerId, rateLimitInfo: result.rateLimitInfo });
+    }
+  } catch (error) {
+    logger.error('Multi-provider payment processing exception', { error, body: req.body });
+    return res.status(500).json({ success: false, error: 'Internal server error' });
+  }
+});
 
 app.get('/api/v1/rate-limit/:userId', (req, res) => {
   try {
@@ -735,7 +939,9 @@ app.get('/api/v2/payment/:meterId', handleTotalPaidQuery);
 app.get('/api/payment/:meterId', handleTotalPaidQuery);
 
 app.use(StandardErrorHandler.handle());
-app.use('*', (_req, res) => { res.status(404).json({ success: false, error: 'Endpoint not found' }); });
+app.use('*', (req: Request, res: Response) => {
+  res.status(404).json({ success: false, error: 'Endpoint not found', requestId: (req as any).requestId });
+});
 
 function getAllowedOrigins(): string[] {
   const origins = [...config.cors.allowedOrigins];
