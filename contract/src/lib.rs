@@ -115,6 +115,10 @@ const INVALID_APPROVER: &str = "Invalid approver";
 const INSUFFICIENT_SIGNATURES: &str = "Insufficient signatures";
 const REFUNDS_PAUSED: &str = "Refund system is paused";
 
+// Meter ID validation constants
+const METER_ID_MIN_LENGTH: u32 = 3;
+const METER_ID_MAX_LENGTH: u32 = 50;
+
 #[contractimpl]
 impl NepaBillingContract {
     
@@ -178,19 +182,37 @@ impl NepaBillingContract {
         // 1. Verify the user authorized this payment
         from.require_auth();
 
-        // 2. Check nonce uniqueness to prevent replay attacks
+        // 2. Validate meter_id format (alphanumeric + hyphens + underscores, 3-50 chars)
+        let meter_id_len = meter_id.len();
+        if meter_id_len < METER_ID_MIN_LENGTH || meter_id_len > METER_ID_MAX_LENGTH {
+            panic!("Meter ID must be between 3 and 50 characters");
+        }
+        let meter_id_bytes = meter_id.as_bytes();
+        for i in 0..meter_id_len as usize {
+            let b = meter_id_bytes[i];
+            let is_valid = (b >= b'A' && b <= b'Z')
+                || (b >= b'a' && b <= b'z')
+                || (b >= b'0' && b <= b'9')
+                || b == b'-'
+                || b == b'_';
+            if !is_valid {
+                panic!("Meter ID contains invalid characters (alphanumeric, hyphens, and underscores only)");
+            }
+        }
+
+        // 3. Check nonce uniqueness to prevent replay attacks
         let nonce_key = (Symbol::short("NONCE"), from.clone(), nonce.clone());
         if env.storage().persistent().has(&nonce_key) {
             panic!("Nonce already used - potential replay attack");
         }
 
-        // 3. Initialize the Token client
+        // 4. Initialize the Token client
         let token_client = token::Client::new(&env, &token_address);
 
-        // 4. Move the tokens from the User to the Contract
+        // 5. Move the tokens from the User to the Contract
         token_client.transfer(&from, &env.current_contract_address(), &amount);
 
-        // 5. Create payment record
+        // 6. Create payment record
         let payment_id = Self::_generate_payment_id(&env);
         let timestamp = env.ledger().timestamp();
         
@@ -206,13 +228,13 @@ impl NepaBillingContract {
             refund_id: None,
         };
 
-        // 6. Store payment record
+        // 7. Store payment record
         env.storage().persistent().set(&payment_id, &payment_record);
 
-        // 7. Mark nonce as used
+        // 8. Mark nonce as used
         env.storage().persistent().set(&nonce_key, &true);
 
-        // 8. Update the meter total (backward compatibility)
+        // 9. Update the meter total (backward compatibility)
         let current_total: i128 = env.storage().persistent().get(&meter_id).unwrap_or(0);
         env.storage().persistent().set(&meter_id, &(current_total + amount));
 
