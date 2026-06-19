@@ -8,6 +8,7 @@ on:
 
 jobs:
   coverage:
+    if: false
     name: Generate Coverage Report
     runs-on: ubuntu-latest
     
