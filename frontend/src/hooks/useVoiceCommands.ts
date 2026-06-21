@@ -57,7 +57,7 @@ function parseVoiceCommand(transcript: string): ParsedPaymentCommand | null {
 function getSpeechRecognition(): SpeechRecognition | null {
   if (typeof window === 'undefined') return null;
   const SpeechRecognitionAPI =
-    (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    window.SpeechRecognition || window.webkitSpeechRecognition;
   return SpeechRecognitionAPI ? new SpeechRecognitionAPI() : null;
 }
 
@@ -217,7 +217,7 @@ export function useVoiceCommands() {
   }, [stopListening]);
 
   const isSupported = typeof window !== 'undefined' &&
-    !!(window.SpeechRecognition || (window as any).webkitSpeechRecognition);
+    !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
   return {
     ...result,
